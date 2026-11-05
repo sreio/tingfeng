@@ -35,6 +35,9 @@ func HTTPURL(raw string) error {
 	return nil
 }
 func ValidateSource(s Source) error {
+	if e := ValidateFields(s); e != nil {
+		return e
+	}
 	if s.Type != "api" && s.Type != "page" && s.Type != "rss" {
 		return fmt.Errorf("来源类型无效")
 	}
@@ -87,6 +90,9 @@ func ParseTemplate(s string) (*template.Template, error) {
 	return template.New("message").Option("missingkey=error").Funcs(template.FuncMap{"json": func(v any) string { b, _ := json.Marshal(v); return string(b) }}).Parse(s)
 }
 func ValidateRule(r Rule) error {
+	if r.Field != "" && !validFieldKey(r.Field) {
+		return fmt.Errorf("判断字段变量名无效")
+	}
 	if !validID(r.ID) {
 		return fmt.Errorf("提醒标识无效")
 	}
@@ -261,6 +267,11 @@ func Validate(c Config) error {
 			rs[r.ID] = true
 			if e := ValidateRule(r); e != nil {
 				return fmt.Errorf("监控「%s」：%w", m.Name, e)
+			}
+			if !m.Draft {
+				if e := ValidateRuleField(r, m.Source); e != nil {
+					return fmt.Errorf("监控「%s」：%w", m.Name, e)
+				}
 			}
 			for _, k := range r.Selections {
 				if !keys[k] {

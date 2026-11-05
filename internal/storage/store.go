@@ -89,11 +89,22 @@ func (s *Store) migrate() error {
 	if e := s.DB.QueryRow("PRAGMA user_version").Scan(&version); e != nil {
 		return e
 	}
-	if version > 1 {
+	if version > 2 {
 		return fmt.Errorf("数据库版本高于程序支持版本，请勿降级")
 	}
-	if version == 1 {
+	if version == 2 {
 		return nil
+	}
+	if version == 1 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return e
+		}
+		defer tx.Rollback()
+		if _, e = tx.Exec("ALTER TABLE records ADD COLUMN fields TEXT NOT NULL DEFAULT '[]'; PRAGMA user_version=2;"); e != nil {
+			return e
+		}
+		return tx.Commit()
 	}
 	_, e := s.DB.Exec(`
  PRAGMA auto_vacuum=INCREMENTAL;
@@ -101,7 +112,7 @@ func (s *Store) migrate() error {
  CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS config(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL,body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS runtime(monitor_id TEXT PRIMARY KEY,generation INTEGER NOT NULL,body TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS records(id INTEGER PRIMARY KEY,monitor_id TEXT NOT NULL,at INTEGER NOT NULL,source_at INTEGER NOT NULL,value TEXT NOT NULL,display TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS records(id INTEGER PRIMARY KEY,monitor_id TEXT NOT NULL,at INTEGER NOT NULL,source_at INTEGER NOT NULL,value TEXT NOT NULL,display TEXT NOT NULL,fields TEXT NOT NULL DEFAULT '[]');
  CREATE INDEX IF NOT EXISTS records_monitor_time ON records(monitor_id,at DESC,id DESC);
  CREATE TABLE IF NOT EXISTS logs(id INTEGER PRIMARY KEY,monitor_id TEXT NOT NULL,at INTEGER NOT NULL,stage TEXT NOT NULL,level TEXT NOT NULL,message TEXT NOT NULL);
  CREATE INDEX IF NOT EXISTS logs_monitor_time ON logs(monitor_id,at DESC,id DESC);
@@ -109,7 +120,7 @@ func (s *Store) migrate() error {
  CREATE INDEX IF NOT EXISTS delivery_due ON deliveries(status,next_attempt);
  CREATE INDEX IF NOT EXISTS delivery_monitor ON deliveries(monitor_id,created_at DESC);
  CREATE TABLE IF NOT EXISTS sessions(hash TEXT PRIMARY KEY,csrf TEXT NOT NULL,expires INTEGER NOT NULL);
- PRAGMA user_version=1;
+ PRAGMA user_version=2;
  `)
 	return e
 }
@@ -241,7 +252,11 @@ func (s *Store) SaveRun(ctx context.Context, rt domain.Runtime, obs *domain.Obse
 				return e
 			}
 		}
-		if _, e = tx.ExecContext(ctx, "INSERT INTO records(monitor_id,at,source_at,value,display) VALUES(?,?,?,?,?)", rt.MonitorID, obs.CheckedAt, obs.SourceAt, string(value), obs.Display); e != nil {
+		fields, err := json.Marshal(obs.Fields)
+		if err != nil {
+			return err
+		}
+		if _, e = tx.ExecContext(ctx, "INSERT INTO records(monitor_id,at,source_at,value,display,fields) VALUES(?,?,?,?,?,?)", rt.MonitorID, obs.CheckedAt, obs.SourceAt, string(value), obs.Display, string(fields)); e != nil {
 			return e
 		}
 	}

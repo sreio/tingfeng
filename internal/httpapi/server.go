@@ -318,6 +318,7 @@ func (s *Server) testSource(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) rulePreview(w http.ResponseWriter, r *http.Request) {
 	var v struct {
+		Source   domain.Source     `json:"source"`
 		Rule     domain.Rule       `json:"rule"`
 		Values   []json.RawMessage `json:"values"`
 		Interval int               `json:"interval"`
@@ -332,6 +333,14 @@ func (s *Server) rulePreview(w http.ResponseWriter, r *http.Request) {
 	}
 	if v.Interval < 1 || v.Interval > 1440 || len(v.Values) > 30 {
 		failure(w, 400, "试算需要 1～1440 分钟间隔和最多 30 个示例值")
+		return
+	}
+	if err := domain.ValidateFields(v.Source); err != nil {
+		failure(w, 400, err.Error())
+		return
+	}
+	if err := domain.ValidateRuleField(v.Rule, v.Source); err != nil {
+		failure(w, 400, err.Error())
 		return
 	}
 	c := s.Engine.Config()
@@ -356,9 +365,10 @@ func (s *Server) rulePreview(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) testChannel(w http.ResponseWriter, r *http.Request) {
 	var v struct {
-		Channel domain.Channel `json:"channel"`
-		Address string         `json:"address"`
-		Text    string         `json:"text"`
+		Channel domain.Channel  `json:"channel"`
+		Address string          `json:"address"`
+		Text    string          `json:"text"`
+		Payload *domain.Payload `json:"payload,omitempty"`
 	}
 	if !decode(w, r, &v) {
 		return
@@ -376,6 +386,14 @@ func (s *Server) testChannel(w http.ResponseWriter, r *http.Request) {
 		text = v.Text
 	}
 	p := domain.Payload{Title: "听风 · 渠道测试", Text: text, Monitor: "渠道测试", Value: "连接成功", Rule: "手动测试", CollectedTime: time.Now().Format(time.RFC3339)}
+	if v.Payload != nil {
+		raw, _ := json.Marshal(v.Payload)
+		if len(raw) > 128<<10 || len(v.Payload.Text) > 16000 || len(v.Payload.Title) > 400 || len(v.Payload.Fields) > 16 || len(v.Payload.Units) > 16 || len(v.Payload.RawFields) > 16 {
+			failure(w, 400, "测试消息过长")
+			return
+		}
+		p = *v.Payload
+	}
 	testID := domain.ID("test")
 	sendErr := s.Engine.Sender.Send(r.Context(), ch, v.Address, p, testID)
 	_ = s.Engine.Store.RecordTest(r.Context(), testID, ch.Name, v.Address, p, sendErr)
@@ -464,7 +482,7 @@ func (s *Server) csv(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `attachment; filename="tingfeng-records.csv"`)
 	_, _ = w.Write([]byte{0xEF, 0xBB, 0xBF})
 	writer := csv.NewWriter(w)
-	_ = writer.Write([]string{"采集时间", "来源时间", "采集值", "提取数据 JSON"})
+	_ = writer.Write([]string{"采集时间", "来源时间", "采集值", "提取数据 JSON", "字段快照 JSON"})
 	count := 0
 	for len(rows) > 0 && count < 100000 {
 		for _, row := range rows {
@@ -475,7 +493,16 @@ func (s *Server) csv(w http.ResponseWriter, r *http.Request) {
 			if row.SourceAt > 0 {
 				source = time.UnixMilli(row.SourceAt).In(loc).Format(time.RFC3339)
 			}
-			if writer.Write([]string{time.UnixMilli(row.At).In(loc).Format(time.RFC3339), source, csvSafe(row.Display), csvSafe(string(row.Value))}) != nil {
+			fields, _ := json.Marshal(row.Fields)
+			display := row.Display
+			if len(row.Fields) > 0 {
+				lines := []string{}
+				for _, f := range row.Fields {
+					lines = append(lines, f.Label+"："+f.Display+f.Unit)
+				}
+				display = strings.Join(lines, "\n")
+			}
+			if writer.Write([]string{time.UnixMilli(row.At).In(loc).Format(time.RFC3339), source, csvSafe(display), csvSafe(string(row.Value)), csvSafe(string(fields))}) != nil {
 				return
 			}
 			count++
@@ -495,7 +522,7 @@ func (s *Server) system(w http.ResponseWriter, r *http.Request) {
 	var stats runtime.MemStats
 	runtime.ReadMemStats(&stats)
 	c := s.Engine.Config()
-	write(w, 200, map[string]any{"heapBytes": stats.HeapAlloc, "goroutines": runtime.NumGoroutine(), "databaseBytes": s.Engine.Store.DiskBytes(), "diskLimitMB": c.Settings.DiskLimitMB, "storagePressure": !s.Engine.Store.HasRoom(c.Settings.DiskLimitMB), "lastCleanup": s.Engine.Store.LastCleanup(r.Context()), "uptimeSeconds": int(time.Since(s.Started).Seconds()), "timeZone": c.Settings.TimeZone, "workers": s.Config.Workers, "allowPrivate": s.Config.AllowPrivate, "maxResponseBytes": s.Config.MaxResponse})
+	write(w, 200, map[string]any{"heapBytes": stats.HeapAlloc, "goroutines": runtime.NumGoroutine(), "databaseBytes": s.Engine.Store.DiskBytes(), "diskLimitMB": c.Settings.DiskLimitMB, "storagePressure": !s.Engine.Store.HasRoom(c.Settings.DiskLimitMB), "lastCleanup": s.Engine.Store.LastCleanup(r.Context()), "uptimeSeconds": int(time.Since(s.Started).Seconds()), "timeZone": c.Settings.TimeZone, "workers": s.Config.Workers, "allowPrivate": s.Engine.Sender.Network.AllowsPrivate(), "maxResponseBytes": s.Config.MaxResponse})
 }
 func (s *Server) cleanup(w http.ResponseWriter, r *http.Request) {
 	out, e := s.Engine.Store.Cleanup(r.Context(), s.Engine.Config())
@@ -563,6 +590,14 @@ func (s *Server) messagePreview(w http.ResponseWriter, r *http.Request) {
 		failure(w, 400, err.Error())
 		return
 	}
+	if err := domain.ValidateFields(v.Source); err != nil {
+		failure(w, 400, err.Error())
+		return
+	}
+	if err := domain.ValidateRuleField(v.Rule, v.Source); err != nil {
+		failure(w, 400, err.Error())
+		return
+	}
 	if len(v.Name) > 400 {
 		failure(w, 400, "监控名称过长")
 		return
@@ -571,9 +606,15 @@ func (s *Server) messagePreview(w http.ResponseWriter, r *http.Request) {
 	if v.Observation != nil {
 		observation = *v.Observation
 	}
-	if len(observation.Display) > 32768 || len(observation.Items) > 500 {
+	serialized, _ := json.Marshal(observation)
+	if len(serialized) > 128<<10 || len(observation.Fields) > 16 || len(observation.Display) > 32768 || len(observation.Items) > 500 {
 		failure(w, 400, "预览数据过大")
 		return
+	}
+	if v.Observation == nil {
+		for _, f := range v.Source.Fields {
+			observation.Fields = append(observation.Fields, domain.FieldValue{Key: f.Key, Label: f.Label, Unit: f.Unit, Display: "待测试", Raw: json.RawMessage("null"), Value: json.RawMessage("null")})
+		}
 	}
 	c := s.Engine.Config()
 	loc, _ := time.LoadLocation(c.Settings.TimeZone)

@@ -10,10 +10,11 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
-var ErrPrivate = errors.New("目标属于内网、回环或保留地址；内部来源需在服务器显式启用 TINGFENG_ALLOW_PRIVATE")
+var ErrPrivate = errors.New("目标属于内网、回环或保留地址；如为可信来源，请到「系统设置 → 内部网络来源」开启访问")
 var blocked = []netip.Prefix{netip.MustParsePrefix("0.0.0.0/8"), netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("192.0.0.0/24"), netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("198.18.0.0/15"), netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("203.0.113.0/24"), netip.MustParsePrefix("240.0.0.0/4"), netip.MustParsePrefix("2001:db8::/32")}
 
 func PublicAddress(ip netip.Addr) bool {
@@ -30,8 +31,26 @@ func PublicAddress(ip netip.Addr) bool {
 }
 
 type Network struct {
-	AllowPrivate bool
-	Timeout      time.Duration
+	AllowPrivate  bool
+	PrivatePolicy *atomic.Bool
+	Timeout       time.Duration
+}
+
+func (n Network) AllowsPrivate() bool {
+	if n.PrivatePolicy != nil {
+		return n.PrivatePolicy.Load()
+	}
+	return n.AllowPrivate
+}
+
+func (n Network) ConfigurePrivate(override *bool) {
+	enabled := n.AllowPrivate
+	if override != nil {
+		enabled = *override
+	}
+	if n.PrivatePolicy != nil {
+		n.PrivatePolicy.Store(enabled)
+	}
 }
 
 func (n Network) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
@@ -47,7 +66,7 @@ func (n Network) DialContext(ctx context.Context, network, address string) (net.
 		return nil, fmt.Errorf("DNS 没有返回地址")
 	}
 	for _, ip := range ips {
-		if !n.AllowPrivate && !PublicAddress(ip) {
+		if !n.AllowsPrivate() && !PublicAddress(ip) {
 			return nil, ErrPrivate
 		}
 	}
@@ -71,8 +90,38 @@ func URL(raw string) error {
 	}
 	return nil
 }
+func (n Network) transport() *http.Transport {
+	return &http.Transport{DialContext: n.DialContext, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, MaxIdleConns: 8, MaxIdleConnsPerHost: 2, IdleConnTimeout: 60 * time.Second, TLSHandshakeTimeout: n.Timeout, ResponseHeaderTimeout: n.Timeout, DisableCompression: false}
+}
+
+type policyTransport struct {
+	policy          *atomic.Bool
+	public, private *http.Transport
+}
+
+func (t *policyTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if t.policy.Load() {
+		return t.private.RoundTrip(r)
+	}
+	// Separate pools prevent a disabled policy from reusing an allowed private connection.
+	t.private.CloseIdleConnections()
+	return t.public.RoundTrip(r)
+}
+
+func (t *policyTransport) CloseIdleConnections() {
+	t.public.CloseIdleConnections()
+	t.private.CloseIdleConnections()
+}
+
 func (n Network) Client() *http.Client {
-	tr := &http.Transport{DialContext: n.DialContext, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, MaxIdleConns: 8, MaxIdleConnsPerHost: 2, IdleConnTimeout: 60 * time.Second, TLSHandshakeTimeout: n.Timeout, ResponseHeaderTimeout: n.Timeout, DisableCompression: false}
+	var tr http.RoundTripper
+	if n.PrivatePolicy == nil {
+		tr = n.transport()
+	} else {
+		public := Network{Timeout: n.Timeout}
+		private := Network{Timeout: n.Timeout, AllowPrivate: true}
+		tr = &policyTransport{policy: n.PrivatePolicy, public: public.transport(), private: private.transport()}
+	}
 	return &http.Client{Timeout: n.Timeout, Transport: tr, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 3 {
 			return fmt.Errorf("重定向次数过多")

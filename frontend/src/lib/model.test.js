@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { addSourceField, enableFields, messageTemplate, primaryUnit } from './model.js';
 import {
   defaults,
   targets,
@@ -59,4 +60,30 @@ test('timed notifications show interval and window separately from sampling', ()
   r.unit = 'hour';
   r.timing = 'window';
   assert.equal(ruleText(r), '每 1 小时发送一次（09:00–18:00）');
+});
+
+test('multiple response selections preserve existing fields and produce distinct safe variables', () => {
+  const source = { path: '', unit: '', type: 'api' };
+  addSourceField(source, '/pronoinfo/0/buyprice');
+  addSourceField(source, '/pronoinfo/0/sellprice');
+  addSourceField(source, '/pronoinfo/0/buyprice');
+  addSourceField(source, '/another/buyprice');
+  addSourceField(source, '/constructor');
+  assert.deepEqual(
+    source.fields.map((f) => f.key),
+    ['buyprice', 'sellprice', 'buyprice_2', 'field_constructor']
+  );
+  source.fields[0].unit = '元/克';
+  assert.equal(primaryUnit(source), '元/克');
+  assert.match(messageTemplate(source), /Fields\.buyprice/);
+  assert.match(messageTemplate(source), /Units\.sellprice/);
+});
+test('legacy single-field configuration upgrades only when explicitly selected', () => {
+  const source = { path: 'data.price', unit: '元', selector: '', attribute: '' };
+  enableFields(source);
+  assert.equal(source.fields[0].path, 'data.price');
+  assert.equal(source.fields[0].unit, '元');
+  addSourceField(source, '/data/second');
+  assert.equal(source.fields.length, 2);
+  assert.equal(source.fields[0].key, 'value');
 });

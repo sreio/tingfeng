@@ -29,15 +29,18 @@ func (s *Store) Records(ctx context.Context, id string, page, size int) (domain.
 	if e := s.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM records WHERE monitor_id=?", id).Scan(&p.Total); e != nil {
 		return p, e
 	}
-	rows, e := s.DB.QueryContext(ctx, "SELECT id,at,source_at,value,display FROM records WHERE monitor_id=? ORDER BY at DESC,id DESC LIMIT ? OFFSET ?", id, size, (page-1)*size)
+	rows, e := s.DB.QueryContext(ctx, "SELECT id,at,source_at,value,display,fields FROM records WHERE monitor_id=? ORDER BY at DESC,id DESC LIMIT ? OFFSET ?", id, size, (page-1)*size)
 	if e != nil {
 		return p, e
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var r domain.Record
-		var raw string
-		if e = rows.Scan(&r.ID, &r.At, &r.SourceAt, &raw, &r.Display); e != nil {
+		var raw, fields string
+		if e = rows.Scan(&r.ID, &r.At, &r.SourceAt, &raw, &r.Display, &fields); e != nil {
+			return p, e
+		}
+		if e = json.Unmarshal([]byte(fields), &r.Fields); e != nil {
 			return p, e
 		}
 		r.Value = json.RawMessage(raw)
@@ -165,7 +168,7 @@ func (s *Store) ClearRecords(ctx context.Context, id string) error {
 }
 
 func (s *Store) RecordsAfter(ctx context.Context, id string, after int64) ([]domain.Record, error) {
-	rows, e := s.DB.QueryContext(ctx, "SELECT id,at,source_at,value,display FROM records WHERE monitor_id=? AND id>? ORDER BY id LIMIT 64", id, after)
+	rows, e := s.DB.QueryContext(ctx, "SELECT id,at,source_at,value,display,fields FROM records WHERE monitor_id=? AND id>? ORDER BY id LIMIT 64", id, after)
 	if e != nil {
 		return nil, e
 	}
@@ -173,8 +176,11 @@ func (s *Store) RecordsAfter(ctx context.Context, id string, after int64) ([]dom
 	out := []domain.Record{}
 	for rows.Next() {
 		var row domain.Record
-		var raw string
-		if e = rows.Scan(&row.ID, &row.At, &row.SourceAt, &raw, &row.Display); e != nil {
+		var raw, fields string
+		if e = rows.Scan(&row.ID, &row.At, &row.SourceAt, &raw, &row.Display, &fields); e != nil {
+			return nil, e
+		}
+		if e = json.Unmarshal([]byte(fields), &row.Fields); e != nil {
 			return nil, e
 		}
 		row.Value = json.RawMessage(raw)

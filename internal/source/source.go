@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/andybalholm/cascadia"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/charset"
 	"io"
@@ -93,7 +92,13 @@ func (f *Fetcher) Fetch(ctx context.Context, s domain.Source) (Preview, error) {
 			return out, fmt.Errorf("响应包含多份 JSON 数据")
 		}
 		out.Fields = fields(root, "", 0)
-		value, e = Extract(root, s.Path)
+		if len(s.Fields) > 0 {
+			e = collectFields(&obs, s.Fields, func(field domain.SourceField) (any, error) {
+				return Extract(root, field.Path)
+			})
+		} else {
+			value, e = Extract(root, s.Path)
+		}
 		if e != nil {
 			return out, e
 		}
@@ -113,37 +118,16 @@ func (f *Fetcher) Fetch(ctx context.Context, s domain.Source) (Preview, error) {
 		if err != nil {
 			return out, fmt.Errorf("网页解析失败")
 		}
-		selector := s.Selector
-		if selector == "" {
-			selector = "body"
+		if len(s.Fields) > 0 {
+			e = collectFields(&obs, s.Fields, func(field domain.SourceField) (any, error) {
+				return pageValue(root, field.Selector, field.Attribute)
+			})
+		} else {
+			value, e = pageValue(root, s.Selector, s.Attribute)
 		}
-		matcher, err := cascadia.Compile(selector)
-		if err != nil {
-			return out, fmt.Errorf("CSS 选择器无效")
+		if e != nil {
+			return out, e
 		}
-		nodes := cascadia.QueryAll(root, matcher)
-		if len(nodes) == 0 {
-			return out, fmt.Errorf("页面没有匹配的元素，请检查选择器；JavaScript 渲染页面需要使用其数据接口")
-		}
-		parts := []string{}
-		for _, n := range nodes {
-			if len(parts) >= 100 {
-				break
-			}
-			if s.Attribute != "" {
-				for _, a := range n.Attr {
-					if a.Key == s.Attribute {
-						parts = append(parts, a.Val)
-					}
-				}
-			} else {
-				parts = append(parts, nodeText(n))
-			}
-		}
-		if len(parts) == 0 {
-			return out, fmt.Errorf("匹配元素中没有指定属性")
-		}
-		value = strings.TrimSpace(strings.Join(parts, "\n"))
 	case "rss":
 		items, err := parseFeed(data)
 		if err != nil {
@@ -157,17 +141,19 @@ func (f *Fetcher) Fetch(ctx context.Context, s domain.Source) (Preview, error) {
 			value = "订阅暂无条目"
 		}
 	}
-	obs.Value, e = json.Marshal(value)
-	if e != nil {
-		return out, fmt.Errorf("结果无法序列化")
+	if len(obs.Fields) == 0 {
+		obs.Value, e = json.Marshal(value)
+		if e != nil {
+			return out, fmt.Errorf("结果无法序列化")
+		}
+		obs.Display = domain.Display(obs.Value)
 	}
 	if len(obs.Value) > 32768 {
 		return out, fmt.Errorf("提取结果超过 32 KB，请选择更具体的字段或元素")
 	}
-	obs.Display = domain.Display(obs.Value)
 	serialized, _ := json.Marshal(obs)
 	if len(serialized) > 128<<10 {
-		return out, fmt.Errorf("订阅内容超过 128 KB，请减少来源的条目数量")
+		return out, fmt.Errorf("采集结果超过 128 KB，请减少字段或条目数量")
 	}
 	out.Observation = obs
 	out.Millis = time.Since(start).Milliseconds()

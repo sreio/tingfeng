@@ -1,8 +1,16 @@
 <script setup>
 import { computed, ref, watch } from 'vue';
 import Icon from './Icon.vue';
+import ExtractFields from './ExtractFields.vue';
 import { api } from '../lib/api.js';
-import { sourceTypes, parsePairs, pairsText } from '../lib/model.js';
+import {
+  sourceTypes,
+  parsePairs,
+  pairsText,
+  newField,
+  enableFields,
+  addSourceField
+} from '../lib/model.js';
 const props = defineProps({ source: Object, monitorId: String });
 const emit = defineEmits(['tested', 'invalidate', 'invalid', 'type']);
 const busy = ref(false),
@@ -36,6 +44,8 @@ function setType(type) {
   props.source.method = 'GET';
   props.source.path = '';
   props.source.selector = '';
+  props.source.attribute = '';
+  props.source.fields = type === 'rss' ? [] : [newField()];
   result.value = null;
   fields.value = [];
   emit('type', type);
@@ -102,7 +112,7 @@ const value = computed(() => result.value?.observation.display || '');
       >已保存认证或请求参数。留空会保留；更换域名后需要重新填写认证。</small
     >
   </div>
-  <div v-if="source.type === 'api'" class="field">
+  <div v-if="source.type === 'api' && !source.fields?.length" class="field">
     <label for="source-path">要关注的 JSON 字段</label
     ><input
       id="source-path"
@@ -110,7 +120,7 @@ const value = computed(() => result.value?.observation.display || '');
       placeholder="例如 data.price、items[0].price 或 /data/price"
     /><small>留空比较完整 JSON。测试后可以直接点击字段。</small>
   </div>
-  <div v-if="source.type === 'page'" class="field">
+  <div v-if="source.type === 'page' && !source.fields?.length" class="field">
     <label for="css-selector">CSS 选择器</label
     ><input
       id="css-selector"
@@ -118,6 +128,10 @@ const value = computed(() => result.value?.observation.display || '');
       placeholder="例如 .price、#stock；留空关注正文"
     /><small>提取静态 HTML。页面由 JavaScript 渲染时，建议使用页面背后的数据接口。</small>
   </div>
+  <ExtractFields v-if="source.type !== 'rss' && source.fields?.length" :source="source" />
+  <button v-else-if="source.type !== 'rss'" class="btn" type="button" @click="enableFields(source)">
+    <Icon name="plus" :size="16" />添加字段 / 设置数值换算
+  </button>
   <details class="advanced">
     <summary>高级请求配置 <span>可选</span><Icon name="down" :size="16" /></summary>
     <div class="advanced-body">
@@ -158,7 +172,7 @@ const value = computed(() => result.value?.observation.display || '');
           autocomplete="off"
         />
       </div>
-      <div v-if="source.type === 'page'" class="field">
+      <div v-if="source.type === 'page' && !source.fields?.length" class="field">
         <label for="source-attribute">提取元素属性</label
         ><input
           id="source-attribute"
@@ -170,7 +184,7 @@ const value = computed(() => result.value?.observation.display || '');
         <label for="source-time">来源更新时间字段</label
         ><input id="source-time" v-model="source.timePath" placeholder="例如 updated_at；可选" />
       </div>
-      <div class="field">
+      <div v-if="!source.fields?.length" class="field">
         <label for="source-unit">显示单位</label
         ><input
           id="source-unit"
@@ -202,7 +216,17 @@ const value = computed(() => result.value?.observation.display || '');
     <Icon name="check" :size="18" />
     <div>
       <strong>采集成功 · {{ result.millis }} ms</strong>
-      <p class="value-wrap">{{ value }}</p>
+      <div v-if="result.observation.fields?.length" class="extracted-preview">
+        <div class="extracted-preview-head">
+          <span>字段</span><span>原值</span><span>最终值</span>
+        </div>
+        <div v-for="field in result.observation.fields" :key="field.key">
+          <strong>{{ field.label }}</strong
+          ><span>{{ typeof field.raw === 'object' ? JSON.stringify(field.raw) : field.raw }}</span>
+          <b>{{ field.display }} {{ field.unit }}</b>
+        </div>
+      </div>
+      <p v-else class="value-wrap">{{ value }}</p>
       <small v-if="source.type === 'rss'"
         >发现
         {{ result.observation.items?.length || 0 }}
@@ -212,17 +236,56 @@ const value = computed(() => result.value?.observation.display || '');
   </div>
   <div v-if="source.type === 'api' && fields.length" class="field-picker">
     <strong>从响应中选择字段</strong>
-    <p class="fine">点击后重新测试，确认提取结果。</p>
+    <p class="fine">点击添加，可连续选择多个字段；设置换算后重新测试。</p>
     <button
       v-for="f in fields"
       :key="f.path"
       type="button"
-      :class="{ selected: source.path === f.path }"
-      @click="source.path = f.path"
+      :class="{ selected: source.fields?.some((item) => item.path === f.path) }"
+      :disabled="source.fields?.some((item) => item.path === f.path) || source.fields?.length >= 16"
+      @click="addSourceField(source, f.path)"
     >
       <code>{{ f.path }}</code
-      ><small>{{ f.type }}</small
+      ><small>{{
+        source.fields?.some((item) => item.path === f.path) ? '已添加' : '添加 · ' + f.type
+      }}</small
       ><span>{{ f.value }}</span>
     </button>
   </div>
 </template>
+
+<style scoped>
+.source-result > div {
+  min-width: 0;
+  flex: 1;
+}
+.extracted-preview {
+  margin-top: 12px;
+  font-size: 13px;
+}
+.extracted-preview > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.3fr;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid #dce6f6;
+}
+.extracted-preview span,
+.extracted-preview b {
+  overflow-wrap: anywhere;
+  min-width: 0;
+  white-space: pre-wrap;
+}
+.extracted-preview-head {
+  color: #516686;
+}
+.field-picker button:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+@media (max-width: 560px) {
+  .extracted-preview > div {
+    gap: 6px;
+  }
+}
+</style>

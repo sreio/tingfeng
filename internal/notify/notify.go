@@ -59,7 +59,33 @@ func Payload(m domain.Monitor, r domain.Rule, obs domain.Observation, previous s
 		return time.UnixMilli(n).In(loc).Format("2006-01-02 15:04:05")
 	}
 	p := domain.Payload{Title: m.Name + " · " + domain.RuleLabel(r), Monitor: m.Name, Value: obs.Display, Previous: previous, Rule: domain.RuleLabel(r), SourceURL: domain.PublicURL(m.Source.URL), SourceTime: stamp(obs.SourceAt), CollectedTime: stamp(obs.CheckedAt), Items: items}
-	if r.Trigger == "periodic" || r.Trigger == "scheduled" {
+	p.Fields = map[string]string{}
+	p.Units = map[string]string{}
+	p.RawFields = map[string]string{}
+	for _, f := range obs.Fields {
+		p.Fields[f.Key] = f.Display
+		p.Units[f.Key] = f.Unit
+		p.RawFields[f.Key] = domain.Display(f.Raw)
+	}
+	if len(obs.Fields) == 0 {
+		p.Fields["value"] = obs.Display
+		p.Units["value"] = m.Source.Unit
+		p.RawFields["value"] = domain.Display(obs.Value)
+	}
+	if r.Field != "" {
+		_, p.Value = obs.Select(r.Field)
+	}
+	unit := m.Source.UnitFor(r.Field)
+	if len(obs.Fields) > 0 {
+		lines := []string{}
+		for _, f := range obs.Fields {
+			lines = append(lines, f.Label+"："+clip(f.Display, 600)+f.Unit)
+		}
+		if r.Trigger == "threshold" {
+			lines = append(lines, "判断值："+clip(previous, 400)+" → "+clip(p.Value, 400)+unit)
+		}
+		p.Text = strings.Join(lines, "\n")
+	} else if r.Trigger == "periodic" || r.Trigger == "scheduled" {
 		p.Text = "最新值：" + clip(obs.Display, 600) + m.Source.Unit
 	} else if r.Trigger == "new" {
 		lines := []string{fmt.Sprintf("发现 %d 条新内容", len(items))}

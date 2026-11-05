@@ -19,6 +19,7 @@ type Config struct {
 	Settings   Settings    `json:"settings"`
 }
 type Settings struct {
+	AllowPrivate *bool  `json:"allowPrivate,omitempty"`
 	TimeZone     string `json:"timeZone"`
 	HistoryDays  int    `json:"historyDays"`
 	MaxRows      int    `json:"maxRows"`
@@ -53,11 +54,13 @@ type Source struct {
 	Attribute           string            `json:"attribute"`
 	TimePath            string            `json:"timePath"`
 	Unit                string            `json:"unit"`
+	Fields              []SourceField     `json:"fields,omitempty"`
 	HasRequestSecrets   bool              `json:"hasRequestSecrets,omitempty"`
 	ClearRequestSecrets bool              `json:"clearRequestSecrets,omitempty"`
 }
 type Rule struct {
 	ID          string   `json:"id"`
+	Field       string   `json:"field,omitempty"`
 	Trigger     string   `json:"trigger"`
 	Operator    string   `json:"operator"`
 	Threshold   float64  `json:"threshold"`
@@ -126,6 +129,7 @@ type Item struct {
 type Observation struct {
 	Value     json.RawMessage `json:"value"`
 	Display   string          `json:"display"`
+	Fields    []FieldValue    `json:"fields,omitempty"`
 	Items     []Item          `json:"items,omitempty"`
 	SourceAt  int64           `json:"sourceAt"`
 	CheckedAt int64           `json:"checkedAt"`
@@ -157,16 +161,19 @@ type Runtime struct {
 	Rules       map[string]RuleState `json:"rules,omitempty"`
 }
 type Payload struct {
-	Title         string `json:"title"`
-	Text          string `json:"text"`
-	Monitor       string `json:"monitor"`
-	Value         string `json:"value"`
-	Previous      string `json:"previous"`
-	Rule          string `json:"rule"`
-	SourceURL     string `json:"sourceURL"`
-	SourceTime    string `json:"sourceTime"`
-	CollectedTime string `json:"collectedTime"`
-	Items         []Item `json:"items,omitempty"`
+	Fields        map[string]string `json:"fields,omitempty"`
+	Units         map[string]string `json:"units,omitempty"`
+	RawFields     map[string]string `json:"rawFields,omitempty"`
+	Title         string            `json:"title"`
+	Text          string            `json:"text"`
+	Monitor       string            `json:"monitor"`
+	Value         string            `json:"value"`
+	Previous      string            `json:"previous"`
+	Rule          string            `json:"rule"`
+	SourceURL     string            `json:"sourceURL"`
+	SourceTime    string            `json:"sourceTime"`
+	CollectedTime string            `json:"collectedTime"`
+	Items         []Item            `json:"items,omitempty"`
 }
 type Delivery struct {
 	ID          string  `json:"id"`
@@ -187,6 +194,7 @@ type Delivery struct {
 	Error       string  `json:"error,omitempty"`
 }
 type Record struct {
+	Fields   []FieldValue    `json:"fields,omitempty"`
 	ID       int64           `json:"id"`
 	At       int64           `json:"at"`
 	SourceAt int64           `json:"sourceAt"`

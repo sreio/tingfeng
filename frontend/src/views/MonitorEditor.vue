@@ -6,6 +6,7 @@ import RuleEditor from '../components/RuleEditor.vue';
 import TargetPicker from '../components/TargetPicker.vue';
 import PersonEditor from '../components/PersonEditor.vue';
 import MessageCard from '../components/MessageCard.vue';
+import MessageTemplateEditor from '../components/MessageTemplateEditor.vue';
 import { api } from '../lib/api.js';
 import {
   clone,
@@ -127,6 +128,14 @@ async function save(draft = false) {
   }
   busy.value = true;
   try {
+    if (!draft) {
+      for (const rule of m.value.rules) {
+        await api('/messages/preview', {
+          method: 'POST',
+          body: { name: m.value.name, source: m.value.source, rule, observation: observation.value }
+        });
+      }
+    }
     const monitor = clone(m.value);
     monitor.name = monitor.name.trim() || '未命名监控';
     monitor.draft = draft;
@@ -162,13 +171,18 @@ async function refreshMessage() {
     });
     messageError.value = '';
   } catch (e) {
-    if (e.name !== 'AbortError') messageError.value = e.message;
+    if (e.name !== 'AbortError') {
+      messageError.value = e.message;
+      message.value = null;
+    }
   }
 }
 watch(
   () => [step.value, JSON.stringify(previewRule.value), m.value.name, observation.value],
   () => {
     clearTimeout(timer);
+    controller?.abort();
+    message.value = null;
     timer = setTimeout(refreshMessage, 200);
     sendResult.value = '';
   }
@@ -182,12 +196,13 @@ async function testSend() {
   sending.value = true;
   sendResult.value = '';
   const list = [...previewTargets.value],
-    text = message.value.text;
+    payload = clone(message.value),
+    text = payload.text;
   const result = await Promise.allSettled(
     list.map((t) =>
       api('/channels/test', {
         method: 'POST',
-        body: { channel: t.channel, address: t.method.address, text }
+        body: { channel: t.channel, address: t.method.address, text, payload }
       })
     )
   );
@@ -357,6 +372,7 @@ async function testSend() {
                 </option></select
               ><small v-else>{{ previewTargets.length }} 个通知方式</small>
             </div>
+            <MessageTemplateEditor :key="previewRule.id" :rule="previewRule" :source="m.source" />
             <MessageCard v-if="message" :item="message" preview />
             <p v-if="messageError" class="error">{{ messageError }}</p>
             <button
@@ -476,7 +492,11 @@ async function testSend() {
               <small>采集</small><strong>{{ m.name || '等待命名的监控' }}</strong>
               <p>
                 {{ sourceInfo(m.source.type).name }} ·
-                {{ m.source.path || m.source.selector || '完整结果' }}
+                {{
+                  m.source.fields?.length
+                    ? m.source.fields.map((f) => f.label).join('、')
+                    : m.source.path || m.source.selector || '完整结果'
+                }}
               </p>
             </div>
           </div>

@@ -76,6 +76,35 @@ ARM64 使用 linux/arm64。复制项目的 compose.yaml 和需要的 .env；镜�
 
 网页只支持静态 HTML，不执行 JavaScript；动态网页请使用其数据接口。数据报告提供基础数值趋势与 CSV，复杂报表可后续扩展。
 
+### 提取多个字段、换算与消息模板
+
+第一步可从测试响应连续添加字段，或手动填写 JSON 路径 / 网页 CSS 选择器，每个来源最多 16 个字段。每个字段有独立的名称、变量名、单位和换算规则，支持加、减、乘、除及仅设置小数位。变量名需以字母开头，使用字母、数字、下划线且不重复。
+
+例如把字段原值 `90441` 配置为「除以 100，保留 2 位」会得到 `904.41`；单位由用户填写。换算采用十进制运算并四舍五入，结果以十进制字符串保存以保留精度。单位是显示文字；变化判断、阈值和历史记录使用换算后的数值。字段不存在、非数字参与换算或除数为零时会明确报错，不发送不完整结果。
+
+变化提醒可选择「任一字段有变化」或一个指定字段；阈值提醒默认判断第一个字段，也可切换到其他字段。历史记录保存当时的字段名称、原值、换算结果和单位，不随后续配置修改。列表默认展示第一个字段，详情和历史可查看全部字段，CSV 增加「字段快照 JSON」列。
+
+第三步的「消息内容」提供默认消息和自定义模板，点击变量可插入光标位置，预览与实际发送使用同一个渲染器。例如：
+
+```text
+{{.Title}}
+买入价：{{.Fields.buyprice}} {{.Units.buyprice}}
+卖出价：{{.Fields.sellprice}} {{.Units.sellprice}}
+采集时间：{{.CollectedTime}}
+```
+
+`Fields` 是换算后的显示值，`Units` 是单位，`RawFields` 可读取换算前的值。变量名与提取字段中的配置一致；模板引用不存在的变量会报错。已有单值监控继续兼容，可点击「添加字段 / 设置数值换算」后升级并重新测试。
+
+变量按钮带中文名称、用途说明和示例。点击会在光标位置插入变量，也可替换选中文字；示例只解释含义，实际发送内容以下方预览为准。「采集时间」是听风取到数据的时间，「来源更新时间」由数据源提供，两者不一定相同。
+
+本版本数据库结构升级为 2，首次启动自动为历史表添加字段快照列，原记录保留。升级前请备份；旧程序不能直接打开版本 2 数据库，回退需要恢复升级前的备份。
+
+### 内部网络来源开关
+
+在「系统设置 → 运行与存储 → 内部网络来源」直接切换，自动保存，重启后保留，无需改文件。未在页面设置过时，沿用 `TINGFENG_ALLOW_PRIVATE`（Docker 对应 `ALLOW_PRIVATE`）的默认值；一旦在页面设置，页面值优先，关闭也可以覆盖环境变量的 `true`。
+
+开启后采集及通知渠道（含邮件）可访问服务器内网、本机和保留地址，只应配置可信目标。关闭后新请求立即恢复公网限制，HTTP 重定向和复用连接也遵守新策略；已发出的请求不会中断。只有通过登录和 CSRF 验证的管理员才能修改。恢复配置备份时保留当前实例的网络开关，避免导入监控时意外扩大访问范围。
+
 ### 渠道配置
 
 | 类型 | 需要配置 |
@@ -91,7 +120,7 @@ ARM64 使用 linux/arm64。复制项目的 compose.yaml 和需要的 .env；镜�
 
 保存的鉴权、机器人地址、密钥不会通过配置 API 回显；编辑留空保留。更换来源域名或 SMTP 主机/账号后，需重新填写相应认证；更换渠道类型不沿用旧密钥。
 
-消息支持 Go text/template，变量：.Title、.Monitor、.Value、.Previous、.Rule、.SourceURL、.SourceTime、.CollectedTime、.Text、.Items。Webhook JSON 示例：
+消息支持 Go text/template，变量：.Title、.Monitor、.Value、.Previous、.Rule、.SourceURL、.SourceTime、.CollectedTime、.Text、.Items、.Fields、.Units、.RawFields。Webhook JSON 示例：
 
     {"title": {{json .Title}}, "content": {{json .Text}}, "value": {{json .Value}}}
 
@@ -129,7 +158,7 @@ Docker 使用 `make backup`，短暂停止服务保证一致性，复制整个�
 | TINGFENG_LISTEN | 127.0.0.1:8080 | HTTP 监听 |
 | TINGFENG_PUBLIC_URL | 空 | 外部 HTTPS origin |
 | TINGFENG_COOKIE_SECURE | false | 限制 Cookie 使用 HTTPS |
-| TINGFENG_ALLOW_PRIVATE | false | 显式允许可信内网来源 |
+| TINGFENG_ALLOW_PRIVATE | false | 内网访问初始默认值；系统设置页面保存的开关优先 |
 | TINGFENG_WORKERS | 1 | 采集并发 1～4 |
 | GOMEMLIMIT | Docker 96MiB | Go 软内存目标 |
 | GOMAXPROCS | Docker 1 | 最大并行 Go 执行线程 |

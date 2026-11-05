@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 	_ "time/tzdata"
@@ -141,7 +142,7 @@ func run() error {
 		return e
 	}
 	defer s.Close()
-	network := secure.Network{AllowPrivate: cfg.AllowPrivate, Timeout: cfg.Timeout}
+	network := secure.Network{AllowPrivate: cfg.AllowPrivate, PrivatePolicy: new(atomic.Bool), Timeout: cfg.Timeout}
 	eng, e := engine.New(s, source.New(network, cfg.MaxResponse), notify.New(network), cfg.Workers)
 	if e != nil {
 		return e

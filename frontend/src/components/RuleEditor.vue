@@ -35,6 +35,7 @@ async function refresh() {
       method: 'POST',
       body: {
         rule: props.rule,
+        source: props.source,
         values: values.value,
         interval: Number(props.interval) || 0,
         anchor: props.anchor || 0
@@ -54,7 +55,12 @@ async function refresh() {
   }
 }
 watch(
-  () => [JSON.stringify(props.rule), props.interval, sample.value],
+  () => [
+    JSON.stringify(props.rule),
+    JSON.stringify(props.source.fields),
+    props.interval,
+    sample.value
+  ],
   () => {
     clearTimeout(timer);
     timer = setTimeout(refresh, 250);
@@ -160,6 +166,25 @@ onBeforeUnmount(() => {
       </p>
     </div>
     <template v-else>
+      <label v-if="source.fields?.length && rule.trigger !== 'new'" class="field">
+        判断哪个字段
+        <select v-model="rule.field" aria-label="判断字段">
+          <option value="">
+            {{
+              rule.trigger === 'change' ? '任一字段有变化' : '第一个字段：' + source.fields[0].label
+            }}
+          </option>
+          <option v-for="f in source.fields" :key="f.key" :value="f.key">
+            {{ f.label }}{{ f.unit ? '（' + f.unit + '）' : '' }}
+          </option>
+          <option
+            v-if="rule.field && !source.fields.some((f) => f.key === rule.field)"
+            :value="rule.field"
+          >
+            字段已删除，请重新选择
+          </option>
+        </select>
+      </label>
       <div v-if="rule.trigger === 'threshold'" class="field">
         <label>提醒阈值</label>
         <div class="frequency-line">
@@ -168,7 +193,9 @@ onBeforeUnmount(() => {
             <option value="lt">向下越过</option></select
           ><input v-model.number="rule.threshold" type="number" step="any" aria-label="阈值" />
         </div>
-        <small>持续高于或低于阈值不会重复提醒。请提取纯数字或数字字符串。</small>
+        <small
+          >使用所选字段换算后的数值判断，单位与字段一致。持续高于或低于阈值不会重复提醒。</small
+        >
       </div>
       <p v-if="rule.trigger === 'new'" class="info-line">
         第一次只记住已有条目，不会把历史文章一次发给你。
@@ -213,23 +240,5 @@ onBeforeUnmount(() => {
       </div>
     </template>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
-    <details class="advanced">
-      <summary>自定义消息内容 <span>可选</span><Icon name="down" :size="16" /></summary>
-      <div class="advanced-body field">
-        <label
-          >消息模板<textarea
-            v-model="rule.template"
-            rows="4"
-            maxlength="4096"
-            placeholder="留空使用包含新旧值、时间和来源链接的默认消息"
-          /></label
-        ><small
-          >可用变量：<code
-            v-text="
-              '{{.Monitor}} {{.Value}} {{.Previous}} {{.Rule}} {{.SourceURL}} {{.SourceTime}} {{.CollectedTime}}'
-            "
-        /></small>
-      </div>
-    </details>
   </div>
 </template>

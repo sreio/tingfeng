@@ -75,6 +75,8 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	old := s.Engine.Config()
+	// Importing monitors must not silently change this server's network access policy.
+	c.Settings.AllowPrivate = old.Settings.AllowPrivate
 	for i, p := range c.Recipients {
 		for _, existing := range old.Recipients {
 			if existing.ID == p.ID {

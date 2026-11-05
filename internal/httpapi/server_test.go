@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -31,7 +32,7 @@ func TestAuthenticatedWorkflowAndRestore(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer store.Close()
-	n := secure.Network{Timeout: time.Second}
+	n := secure.Network{PrivatePolicy: new(atomic.Bool), Timeout: time.Second}
 	eng, e := engine.New(store, source.New(n, 2<<20), notify.New(n), 1)
 	if e != nil {
 		t.Fatal(e)
@@ -88,15 +89,30 @@ func TestAuthenticatedWorkflowAndRestore(t *testing.T) {
 	}
 	c := testutil.Config("https://example.com/data?token=fixture-request-secret", "https://example.com/hook")
 	c.Channels[0].Secret = "fixture-channel-secret"
+	enabled := true
+	c.Settings.AllowPrivate = &enabled
 	request("PUT", "/api/config", c, 403, srv.URL, false)
 	request("PUT", "/api/config", c, 403, "https://evil.example", true)
+	if n.AllowsPrivate() {
+		t.Fatal("unauthorized request changed network access")
+	}
 	out := request("PUT", "/api/config", c, 200, srv.URL, true)
+	var system struct {
+		AllowPrivate bool `json:"allowPrivate"`
+	}
+	json.Unmarshal(request("GET", "/api/system", nil, 200, "", false), &system)
+	if !system.AllowPrivate {
+		t.Fatal("system status did not report live policy")
+	}
 	if bytes.Contains(out, []byte("fixture-request-secret")) || bytes.Contains(out, []byte("fixture-channel-secret")) {
 		t.Fatal("secret reflected")
 	}
 	request("PUT", "/api/config", c, 409, srv.URL, true)
 	var got domain.Config
 	json.Unmarshal(out, &got)
+	disabled := false
+	got.Settings.AllowPrivate = &disabled
+	json.Unmarshal(request("PUT", "/api/config", got, 200, srv.URL, true), &got)
 	backup := request("GET", "/api/backup", nil, 200, "", false)
 	if strings.Contains(string(backup), "fixture-request-secret") {
 		t.Fatal("backup exported request secret")
@@ -105,6 +121,7 @@ func TestAuthenticatedWorkflowAndRestore(t *testing.T) {
 	if e = json.Unmarshal(backup, &archive); e != nil {
 		t.Fatal(e)
 	}
+	archive.Config.Settings.AllowPrivate = &enabled
 	restore := map[string]any{"backup": archive, "preview": true, "revision": got.Revision}
 	request("POST", "/api/restore", restore, 200, srv.URL, true)
 	if !eng.Config().Monitors[0].Enabled {
@@ -113,6 +130,9 @@ func TestAuthenticatedWorkflowAndRestore(t *testing.T) {
 	restore["preview"] = false
 	request("POST", "/api/restore", restore, 200, srv.URL, true)
 	imported := eng.Config()
+	if n.AllowsPrivate() {
+		t.Fatal("restoring a backup widened internal network access")
+	}
 	if imported.Monitors[0].Enabled || !imported.Monitors[0].NeedsReview || imported.Channels[0].Enabled || imported.Channels[0].Secret != "" {
 		t.Fatal("restore unsafe")
 	}

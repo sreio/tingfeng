@@ -1,5 +1,5 @@
 <script setup>
-import { inject, ref, watch } from 'vue';
+import { computed, inject, ref, watch } from 'vue';
 import Icon from '../components/Icon.vue';
 import PasswordInput from '../components/PasswordInput.vue';
 import { api, download } from '../lib/api.js';
@@ -19,6 +19,11 @@ const defaults = ref(clone(props.config.settings)),
   passwordError = ref(''),
   changing = ref(false),
   showPassword = ref(false);
+const networkSaving = ref(false),
+  networkError = ref('');
+const privateEnabled = computed(
+  () => props.config.settings.allowPrivate ?? props.system?.allowPrivate ?? false
+);
 const restoreOpen = ref(false),
   backupText = ref(''),
   restorePreview = ref(null),
@@ -41,6 +46,27 @@ async function saveDefaults() {
     error.value = e.message;
   } finally {
     busy.value = false;
+  }
+}
+async function togglePrivate() {
+  if (networkSaving.value || busy.value) return;
+  networkSaving.value = true;
+  networkError.value = '';
+  const draftDefaults = clone(defaults.value);
+  try {
+    const next = clone(props.config);
+    next.settings.allowPrivate = !privateEnabled.value;
+    await saveConfig(next);
+    defaults.value = { ...draftDefaults, allowPrivate: next.settings.allowPrivate };
+    notice(
+      next.settings.allowPrivate
+        ? '内部网络访问已开启，立即生效。'
+        : '内部网络访问已关闭，新请求仅允许公网地址。'
+    );
+  } catch (e) {
+    networkError.value = e.message;
+  } finally {
+    networkSaving.value = false;
   }
 }
 async function changePassword() {
@@ -283,7 +309,7 @@ async function restore() {
           >
         </div>
         <p v-if="error" class="error" role="alert">{{ error }}</p>
-        <button class="btn primary" :disabled="busy">
+        <button class="btn primary" :disabled="busy || networkSaving">
           {{ busy ? '保存中…' : '保存默认设置' }}
         </button>
       </form>
@@ -318,13 +344,34 @@ async function restore() {
           <strong>内部网络来源</strong>
           <p>
             {{
-              system?.allowPrivate
-                ? '已允许内网请求，请只配置可信来源。'
-                : '默认阻止内网、回环及元数据地址。内部接口需在服务器显式开启 TINGFENG_ALLOW_PRIVATE。'
+              privateEnabled
+                ? '已允许采集和通知渠道访问服务器内网、本机及保留地址，请只配置可信目标。'
+                : '已阻止内网、回环和保留地址（包括云主机元数据地址），当前仅允许公网请求。'
             }}
           </p>
+          <p>
+            点击开关自动保存，无需改配置文件或重启。关闭后新请求立即恢复限制，已发出的请求不会中断。
+          </p>
+          <p v-if="networkError" class="error" role="alert">{{ networkError }}</p>
         </div>
-        <span class="tag">{{ system?.allowPrivate ? '已启用' : '受保护' }}</span>
+        <div class="network-control">
+          <button
+            type="button"
+            role="switch"
+            class="switch"
+            :class="{ on: privateEnabled }"
+            :aria-checked="privateEnabled"
+            :aria-busy="networkSaving"
+            aria-label="允许访问内部网络"
+            :disabled="busy || networkSaving || !system"
+            @click="togglePrivate"
+          >
+            <span />
+          </button>
+          <small role="status">{{
+            networkSaving ? '保存中…' : privateEnabled ? '已开启' : '已关闭'
+          }}</small>
+        </div>
       </div>
     </section>
     <section class="panel settings-panel">
@@ -382,3 +429,14 @@ async function restore() {
     </section>
   </main>
 </template>
+
+<style scoped>
+.network-control {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  min-width: 56px;
+}
+</style>

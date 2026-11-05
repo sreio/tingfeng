@@ -11,7 +11,8 @@ const rows = ref([]),
   total = ref(0),
   page = ref(1),
   busy = ref(false),
-  error = ref('');
+  error = ref(''),
+  selectedField = ref('');
 let request = 0;
 async function load(p = 1) {
   const id = ++request;
@@ -35,18 +36,35 @@ watch(
   () => load(),
   { immediate: true }
 );
+const fieldOptions = computed(() => {
+  const found = new Map();
+  for (const row of rows.value) {
+    for (const field of row.fields || []) {
+      const key = JSON.stringify([field.key, field.unit]);
+      if (!found.has(key))
+        found.set(key, { key, label: field.label, unit: field.unit, field: field.key });
+    }
+  }
+  return [...found.values()];
+});
+const activeField = computed(
+  () => fieldOptions.value.find((f) => f.key === selectedField.value) || fieldOptions.value[0]
+);
 const numbers = computed(() =>
   rows.value
-    .map((r) =>
-      typeof r.value === 'number'
-        ? r.value
-        : typeof r.value === 'string' && r.value.trim() !== ''
-          ? Number(r.value)
-          : NaN
-    )
+    .map((row) => {
+      const choice = activeField.value;
+      const raw = choice
+        ? row.fields?.find((f) => f.key === choice.field && f.unit === choice.unit)?.value
+        : row.value;
+      return typeof raw === 'number' || (typeof raw === 'string' && raw.trim() !== '')
+        ? Number(raw)
+        : NaN;
+    })
     .filter(Number.isFinite)
     .reverse()
 );
+
 const points = computed(() => {
   const n = numbers.value,
     min = Math.min(...n),
@@ -103,9 +121,22 @@ async function clear() {
   <p v-if="error" class="error">
     {{ error }} <button class="text-btn" @click="load(page)">重试</button>
   </p>
+  <label v-if="fieldOptions.length" class="field">
+    查看哪个字段的趋势
+    <select
+      :value="activeField?.key"
+      aria-label="历史趋势字段"
+      @change="selectedField = $event.target.value"
+    >
+      <option v-for="f in fieldOptions" :key="f.key" :value="f.key">
+        {{ f.label }}{{ f.unit ? '（' + f.unit + '）' : '' }}
+      </option>
+    </select>
+  </label>
   <figure v-if="numbers.length > 1" class="price-trend">
     <figcaption>
-      本页数据趋势 <span>{{ numbers[0] }} → {{ numbers.at(-1) }} {{ monitor.source.unit }}</span>
+      本页数据趋势
+      <span>{{ numbers[0] }} → {{ numbers.at(-1) }} {{ activeField?.unit || '' }}</span>
     </figcaption>
     <svg
       viewBox="0 0 300 73"
@@ -128,7 +159,7 @@ async function clear() {
       <thead>
         <tr>
           <th>采集时间</th>
-          <th>采集值 {{ monitor.source.unit }}</th>
+          <th>采集值</th>
           <th>来源更新时间</th>
         </tr>
       </thead>
@@ -136,10 +167,16 @@ async function clear() {
         <tr v-for="r in rows" :key="r.id">
           <td>{{ fmt(r.at, timeZone) }}</td>
           <td class="value-cell">
-            {{ r.display }}
+            <dl v-if="r.fields?.length" class="record-fields">
+              <div v-for="f in r.fields" :key="f.key">
+                <dt>{{ f.label }}</dt>
+                <dd>{{ f.display }} {{ f.unit }}</dd>
+              </div>
+            </dl>
+            <template v-else>{{ r.display }}</template>
             <details v-if="r.value && typeof r.value === 'object'" class="record-detail">
-              <summary>查看提取数据</summary>
-              <pre>{{ JSON.stringify(r.value, null, 2) }}</pre>
+              <summary>查看字段原值与提取数据</summary>
+              <pre>{{ JSON.stringify(r.fields?.length ? r.fields : r.value, null, 2) }}</pre>
             </details>
           </td>
           <td>{{ r.sourceAt ? fmt(r.sourceAt, timeZone) : '来源未提供' }}</td>
@@ -162,3 +199,22 @@ async function clear() {
     清空此监控的历史
   </button>
 </template>
+
+<style scoped>
+.record-fields {
+  margin: 0;
+}
+.record-fields div {
+  display: flex;
+  gap: 12px;
+  margin: 5px 0;
+}
+.record-fields dt {
+  color: #56657e;
+}
+.record-fields dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+</style>

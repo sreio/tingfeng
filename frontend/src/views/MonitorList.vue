@@ -1,4 +1,5 @@
 <script setup>
+import { primaryUnit } from '../lib/model.js';
 import { computed, inject, ref } from 'vue';
 import Icon from '../components/Icon.vue';
 import { api } from '../lib/api.js';
@@ -190,7 +191,7 @@ const problem = (m) =>
               :class="{ numeric: typeof runtime(m)?.latest?.value === 'number' }"
               :title="runtime(m)?.latest?.display"
               >{{ runtime(m)?.latest?.display || '等待首次采集'
-              }}<small>{{ m.source.unit }}</small></strong
+              }}<small>{{ primaryUnit(m.source) }}</small></strong
             >
           </div>
         </div>

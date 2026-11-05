@@ -18,6 +18,7 @@ export const sourceInfo = (t) => sourceTypes.find((s) => s.id === t) || sourceTy
 export const newRule = () => ({
   id: uid('rule'),
   trigger: 'change',
+  field: '',
   operator: 'gt',
   threshold: 130,
   cooldown: 30,
@@ -57,6 +58,7 @@ export function newMonitor(config) {
       attribute: '',
       timePath: '',
       unit: '',
+      fields: [newField()],
       query: {},
       headers: {},
       body: ''
@@ -195,3 +197,55 @@ export const statusLabels = {
   draft: '草稿',
   review: '待检查'
 };
+
+export const newField = () => ({
+  key: 'value',
+  label: '数值',
+  path: '',
+  selector: '',
+  attribute: '',
+  unit: '',
+  calculation: null
+});
+export const primaryUnit = (source) =>
+  source.fields?.length ? source.fields[0].unit : source.unit;
+export function enableFields(source) {
+  if (!source.fields?.length)
+    source.fields = [
+      {
+        ...newField(),
+        path: source.path || '',
+        selector: source.selector || '',
+        attribute: source.attribute || '',
+        unit: source.unit || ''
+      }
+    ];
+}
+export function addSourceField(source, path) {
+  enableFields(source);
+  if (source.fields.some((f) => f.path === path) || source.fields.length >= 16) return;
+  let key = path
+    .split('/')
+    .at(-1)
+    .replaceAll('~1', '_')
+    .replaceAll('~0', '_')
+    .replace(/[^A-Za-z0-9_]/g, '_');
+  if (!/^[A-Za-z]/.test(key)) key = 'field_' + key;
+  if (['constructor', 'prototype'].includes(key)) key = 'field_' + key;
+  key = key.slice(0, 28) || 'field';
+  const base = key;
+  let n = 2;
+  while (source.fields.some((f) => f.key === key)) key = base + '_' + n++;
+  const blank = source.fields.length === 1 && source.fields[0].path === '';
+  if (blank) Object.assign(source.fields[0], { key, label: key, path });
+  else source.fields.push({ ...newField(), key, label: key, path });
+}
+export function messageTemplate(source) {
+  const fields = source.fields || [];
+  const lines = fields.length
+    ? fields.map((f) => f.label + '：{{.Fields.' + f.key + '}} {{.Units.' + f.key + '}}')
+    : ['当前值：{{.Value}}', '上次值：{{.Previous}}'];
+  return ['{{.Title}}', ...lines, '采集时间：{{.CollectedTime}}', '来源：{{.SourceURL}}'].join(
+    '\n'
+  );
+}

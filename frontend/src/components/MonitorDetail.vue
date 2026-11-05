@@ -1,4 +1,5 @@
 <script setup>
+import { primaryUnit } from '../lib/model.js';
 import { inject, ref, watch } from 'vue';
 import Dialog from './Dialog.vue';
 import Icon from './Icon.vue';
@@ -111,7 +112,7 @@ watch(
         ><small>最新成功结果</small
         ><strong
           >{{ state?.latest?.display || '暂无采集结果'
-          }}<small>{{ monitor.source.unit }}</small></strong
+          }}<small>{{ primaryUnit(monitor.source) }}</small></strong
         >
       </div>
       <dl class="detail-list">
@@ -171,6 +172,12 @@ watch(
                 : '不新增历史'
             }}
           </dd>
+        </div>
+      </dl>
+      <dl v-if="state?.latest?.fields?.length" class="detail-list">
+        <div v-for="f in state.latest.fields" :key="f.key">
+          <dt>{{ f.label }}</dt>
+          <dd>{{ f.display }} {{ f.unit }}</dd>
         </div>
       </dl>
       <div v-if="state?.incident" class="incident-card">

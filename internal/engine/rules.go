@@ -172,3 +172,11 @@ func withinWindow(r domain.Rule, now time.Time, loc *time.Location) bool {
 	}
 	return minute >= start || minute < end
 }
+
+func ruleValue(r domain.Rule, o domain.Observation) json.RawMessage {
+	if r.Trigger == "change" && r.Field == "" {
+		return o.Value
+	}
+	value, _ := o.Select(r.Field)
+	return value
+}

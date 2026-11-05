@@ -34,6 +34,7 @@ func New(s *storage.Store, f *source.Fetcher, n *notify.Sender, workers int) (*E
 	if e != nil {
 		return nil, e
 	}
+	n.Network.ConfigurePrivate(c.Settings.AllowPrivate)
 	return &Engine{Store: s, Fetcher: f, Sender: n, cfg: c, slots: make(chan struct{}, workers), wake: make(chan struct{}, 1)}, nil
 }
 func (e *Engine) Config() domain.Config {
@@ -48,6 +49,9 @@ func (e *Engine) SaveConfig(ctx context.Context, c domain.Config) (domain.Config
 		return domain.Config{}, storage.ErrConflict
 	}
 	domain.MergeSecrets(&c, e.cfg)
+	if c.Settings.AllowPrivate == nil {
+		c.Settings.AllowPrivate = e.cfg.Settings.AllowPrivate
+	}
 	if err := domain.Validate(c); err != nil {
 		return domain.Config{}, err
 	}
@@ -66,6 +70,7 @@ func (e *Engine) SaveConfig(ctx context.Context, c domain.Config) (domain.Config
 		return domain.Config{}, err
 	}
 	e.cfg = c
+	e.Sender.Network.ConfigurePrivate(c.Settings.AllowPrivate)
 	select {
 	case e.wake <- struct{}{}:
 	default:
@@ -263,14 +268,14 @@ func (e *Engine) check(ctx context.Context, id string) (domain.Runtime, error) {
 			} else {
 				switch r.Trigger {
 				case "threshold":
-					should = Crossed(r, previous.Value, current.Value)
+					should = Crossed(r, ruleValue(r, *previous), ruleValue(r, current))
 					reason = "没有越过阈值"
 				case "new":
 					should = len(fresh) > 0
 					items = fresh
 					reason = "没有新条目"
 				default:
-					should = ValueChanged(previous.Value, current.Value)
+					should = ValueChanged(ruleValue(r, *previous), ruleValue(r, current))
 				}
 				if should && at-state.LastQueued < int64(r.Cooldown)*60000 {
 					should = false
@@ -283,7 +288,8 @@ func (e *Engine) check(ctx context.Context, id string) (domain.Runtime, error) {
 					reason = "没有可用的通知渠道"
 					rt.Incident = &domain.Incident{At: at, Message: reason}
 				} else {
-					payload, err := notify.Payload(m, r, current, previous.Display, items, loc)
+					_, previousDisplay := previous.Select(r.Field)
+					payload, err := notify.Payload(m, r, current, previousDisplay, items, loc)
 					if err != nil {
 						reason = err.Error()
 						log("evaluate", "error", reason)
