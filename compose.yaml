@@ -1,0 +1,32 @@
+name: tingfeng
+services:
+  tingfeng:
+    build: .
+    image: tingfeng:local
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:8080"
+    environment:
+      TINGFENG_PUBLIC_URL: ${PUBLIC_URL:-}
+      TINGFENG_COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      TINGFENG_ALLOW_PRIVATE: ${ALLOW_PRIVATE:-false}
+      TINGFENG_WORKERS: ${WORKERS:-1}
+      GOMEMLIMIT: ${GOMEMLIMIT:-96MiB}
+      GOMAXPROCS: "1"
+    volumes:
+      - data:/data
+    mem_limit: 192m
+    cpus: 1.0
+    pids_limit: 64
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+volumes:
+  data:
