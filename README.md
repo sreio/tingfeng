@@ -2,6 +2,8 @@
 
 个人使用的轻量监控与通知服务。Go 单进程内嵌 Vue 页面，SQLite 保存数据。关闭浏览器后服务器继续运行，无需 Redis、外部数据库或浏览器渲染进程。本项目独立于 monitor-push 和原型。
 
+[Docker 部署](#docker-启动) · [二进制部署](#二进制运行) · [备份和恢复](#备份和恢复)
+
 ## 功能
 
 - HTTP JSON：GET / POST、参数、请求头、请求体、JSON 字段提取。
@@ -43,7 +45,71 @@ make backup && git pull --ff-only origin main && make up
 
 `make backup` 会短暂停服，把整个 `/data`（包括 `tingfeng.db` 和 `master.key`）复制到宿主机的 `backups/时间戳/`，再启动原服务。备份成功才会拉取代码、重建容器。新版继续挂载原数据卷，管理员密码、监控、接收人、渠道密钥和设置都会保留；历史与发送记录仍按原保留策略清理。更新后用 `make status` 确认服务健康。
 
-日常停止可用 `make down`。**不要使用 `docker compose down -v`，它会删除数据卷。** 如果更新后意外出现首次初始化页面，先检查 Compose 项目名和挂载的卷，换了项目名可能会创建空卷。若新版迁移了数据库结构，回退时应使用旧版程序和**升级前的整份备份**，见[备份和恢复](#备份和恢复)。低配 VPS 若使用预构建镜像，同样先备份，再按下节方法加载新镜像并执行 `docker compose up -d --no-build`。
+日常停止可用 `make down`。**不要使用 `docker compose down -v`，它会删除数据卷。** 如果更新后意外出现首次初始化页面，先检查 Compose 项目名和挂载的卷，换了项目名可能会创建空卷。若新版迁移了数据库结构，回退时应使用旧版程序和**升级前的整份备份**，见[备份和恢复](#备份和恢复)。低配 VPS 若使用预构建镜像，同样先备份，再按 [VPS 与资源](#vps-与资源) 加载新镜像并执行 `docker compose up -d --no-build`。
+
+## 二进制运行
+
+听风的 Web 界面已打包进 `tingfeng`。低配 VPS 可以只上传一个可执行文件。下面用同一个普通用户安装和运行，程序放在 `$HOME/.local/bin/tingfeng`，数据单独放在 `$HOME/.local/share/tingfeng`。已有实例请沿用原来的 `TINGFENG_DATA_DIR`，默认的 `./data` 相对于启动时的工作目录。
+
+**构建并上传。** 在装有 Go 1.26、Node 24、npm 和 make 的开发机上，进入本项目源码目录。用 VPS 上 `uname -m` 的结果选择架构，`x86_64` 选 `amd64`，`aarch64` 或 `arm64` 选 `arm64`。将 `user@your-vps` 换成自己的 SSH 账号和地址。
+
+```sh
+GOOS=linux GOARCH=amd64 make build
+scp bin/tingfeng user@your-vps:tingfeng.new
+```
+
+已有对应架构的二进制，直接上传为 VPS 用户主目录的 `tingfeng.new` 即可。如果就在本机运行，执行 `make build`，下一步的安装源文件改用 `bin/tingfeng`。
+
+**启动和首次登录。** 在目标机器执行以下命令。服务在当前终端运行，按 `Ctrl+C` 可停止。
+
+```sh
+mkdir -p "$HOME/.local/bin"
+install -m 755 "$HOME/tingfeng.new" "$HOME/.local/bin/tingfeng"
+export TINGFENG_DATA_DIR="$HOME/.local/share/tingfeng"
+"$HOME/.local/bin/tingfeng" serve
+```
+
+首次启动后，在同一台机器的另一个终端用 `cat "$HOME/.local/share/tingfeng/setup.token"` 读取初始化令牌。打开 `http://127.0.0.1:8080`，用令牌设置管理员密码。部署在 VPS 时，先在自己的电脑执行 `ssh -L 8080:127.0.0.1:8080 user@your-vps`，再打开该地址。
+
+**Linux 后台运行与开机启动。** 使用 systemd 的 VPS 可以把听风注册为当前用户的服务。先按 `Ctrl+C` 停止上面的前台实例，再用同一账号创建并启动服务。
+
+```sh
+mkdir -p "$HOME/.config/systemd/user"
+cat > "$HOME/.config/systemd/user/tingfeng.service" <<'EOF'
+[Unit]
+Description=Tingfeng monitor
+
+[Service]
+ExecStart=%h/.local/bin/tingfeng serve
+Environment=TINGFENG_DATA_DIR=%h/.local/share/tingfeng
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user daemon-reload
+systemctl --user enable --now tingfeng.service
+```
+
+需要退出 SSH 后继续运行并随服务器开机启动时，执行一次 `loginctl enable-linger "$(id -un)"`。若提示权限不足，请管理员为该账号启用。用 `systemctl --user status tingfeng` 查看状态，`journalctl --user -u tingfeng -n 50` 查看日志。[systemd 的 loginctl 说明](https://www.freedesktop.org/software/systemd/man/latest/loginctl.html)
+
+**升级与停用。** 先用当前程序完成一次[二进制备份](#二进制备份与恢复)，把新版上传为 `$HOME/tingfeng.new`。以下命令保留上一版程序，并在确认新版能执行后替换文件。
+
+```sh
+(
+  set -e
+  cd "$HOME/.local/bin"
+  install -m 755 "$HOME/tingfeng.new" tingfeng.next
+  ./tingfeng.next version
+  cp -p tingfeng tingfeng.previous
+  mv -f tingfeng.next tingfeng
+)
+```
+
+替换成功后，systemd 用户执行 `systemctl --user restart tingfeng`。前台用户按 `Ctrl+C` 后用原数据目录再次启动。服务就绪后可用 `"$HOME/.local/bin/tingfeng" healthcheck` 检查，成功时退出码为 0。自定义端口时，给健康检查传入与服务相同的 `TINGFENG_LISTEN`。
+
+临时停用可执行 `systemctl --user stop tingfeng`。卸载时先执行 `systemctl --user disable --now tingfeng`，删除上述 `tingfeng.service` 文件并执行 `systemctl --user daemon-reload`，再移除已安装的程序文件。数据和备份目录可以留给下次安装。
 
 ## VPS 与资源
 
@@ -72,7 +138,7 @@ ARM64 使用 linux/arm64。复制项目的 compose.yaml 和需要的 .env；镜�
 
     ssh -L 8080:127.0.0.1:8080 user@your-vps
 
-也可以将 HTTPS 反向代理转发到 127.0.0.1:8080。复制 .env.example 为 .env，设置 `PUBLIC_URL=https://monitor.example.com`、`COOKIE_SECURE=true` 后重新启动。PUBLIC_URL 必须与浏览器实际访问的 origin 一致，代理应保留 Host。需要其他监听地址时修改 BIND_ADDRESS。
+也可以将 HTTPS 反向代理转发到 127.0.0.1:8080，代理应保留 Host。Compose 部署将 .env.example 复制为 .env，设置 `PUBLIC_URL=https://monitor.example.com` 和 `COOKIE_SECURE=true`，监听地址由 `BIND_ADDRESS` 控制。二进制部署在进程环境中设置 `TINGFENG_PUBLIC_URL` 和 `TINGFENG_COOKIE_SECURE`，监听地址由 `TINGFENG_LISTEN` 控制。对外地址应与浏览器实际访问的 origin 一致，更改后重启服务。
 
 密码使用 PBKDF2 派生保存；Cookie 为 HttpOnly / SameSite=Strict；写操作校验 CSRF；HTTPS 入口使用 Secure Cookie。
 
@@ -169,11 +235,44 @@ Docker 使用 `make backup`，短暂停止服务保证一致性，复制整个�
 
 恢复时先备份当前实例并停止，使用新的空数据卷，避免旧 WAL 混入。可修改 compose.yaml 的卷名称后执行 `docker compose create --force-recreate`，再将备份复制到 /data。运行 UID/GID 为 65532:65532，恢复后需保证数据目录归该用户所有。最后 `docker compose start`。完整恢复保留原密码及调度状态，可能继续投递未完成消息。
 
-宿主二进制支持在线一致性备份：
+### 二进制备份与恢复
 
-    TINGFENG_DATA_DIR=./data ./bin/tingfeng backup --out ./backups/manual-20261105
+二进制部署使用正在运行的同版本 `tingfeng backup` 在线备份，服务可以继续采集。用运行听风的账号执行，指定当前实例的真实数据目录。`--out` 必须是一个尚不存在的新目录，命令会自动创建它。
 
-恢复时停止服务，将备份目录作为新的 TINGFENG_DATA_DIR 启动。重置管理员执行 `./bin/tingfeng reset-password --confirm`，并指定原数据目录。
+```sh
+export TINGFENG_DATA_DIR="$HOME/.local/share/tingfeng"
+snapshot="$HOME/backups/tingfeng/$(date +%Y%m%d-%H%M%S)"
+test -s "$TINGFENG_DATA_DIR/tingfeng.db" &&
+  test -s "$TINGFENG_DATA_DIR/master.key" &&
+  "$HOME/.local/bin/tingfeng" backup --out "$snapshot" &&
+  printf '备份位置 %s\n' "$snapshot"
+```
+
+看到成功提示后再使用该备份。目录包含已提交数据的 SQLite 快照和配套的 `master.key`，尚未初始化的实例还会包含 `setup.token`。请私密保存整份目录。页面中的配置导出适合迁移配置，完整恢复请用这里生成的备份。
+
+**恢复已有实例或迁移到新机器。** 先停服务（前台按 `Ctrl+C`，systemd 执行 `systemctl --user stop tingfeng`）。在目标机器使用运行听风的账号，把下方 `src` 改成要恢复的完整备份目录。命令先复制备份，再把现有数据整体移到一个独立目录，避免旧 SQLite WAL 混入。
+
+```sh
+(
+  set -eu
+  src="$HOME/backups/tingfeng/替换为实际时间戳"
+  live="$HOME/.local/share/tingfeng"
+  test -s "$src/tingfeng.db"
+  test -s "$src/master.key"
+  mkdir -p "$(dirname "$live")"
+  swap=$(mktemp -d "$live.restore.XXXXXX")
+  cp -Rp "$src" "$swap/restored"
+  if [ -d "$live" ]; then
+    mv "$live" "$swap/previous"
+    printf '恢复前的数据已保留在 %s/previous\n' "$swap"
+  fi
+  mv "$swap/restored" "$live"
+)
+```
+
+恢复命令成功后按原方式启动，用原密码登录并核对监控和记录。恢复会回到备份时刻，队列中待发送的通知可能继续投递。若升级改变了数据库结构，需要回退时，在停服期间将 `tingfeng.previous` 换回 `tingfeng`，并恢复**升级前**的备份，再启动旧版。
+
+忘记密码时，用原数据目录执行 `TINGFENG_DATA_DIR="$HOME/.local/share/tingfeng" "$HOME/.local/bin/tingfeng" reset-password --confirm`。旧登录会失效，使用数据目录中新生成的 `setup.token` 在页面设置新密码。
 
 ## 开发与目录
 
