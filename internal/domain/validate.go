@@ -166,6 +166,16 @@ func ValidateChannel(c Channel, requireSecrets bool) error {
 		if c.TLS != "tls" && c.TLS != "starttls" {
 			return fmt.Errorf("SMTP 必须启用 TLS 或 STARTTLS")
 		}
+	} else if c.Type == "bark" {
+		base := c.Endpoint()
+		u, err := url.Parse(base)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil ||
+			u.EscapedPath() != "" || strings.ContainsAny(base, "?#") || len(base) > 4096 {
+			return fmt.Errorf("Bark 服务地址只填写 HTTP(S) 域名和可选端口，不含设备 Key、路径或参数")
+		}
+		if (requireSecrets || c.Secret != "") && (c.Secret == "" || strings.ContainsAny(c.Secret, "/\\?# \t\r\n\x00")) {
+			return fmt.Errorf("请填写该 Bark 服务的设备 Key，勿粘贴完整推送链接；更换服务后需重新填写")
+		}
 	} else if c.Type == "telegram" {
 		if (requireSecrets || c.Secret != "") && !telegramToken.MatchString(c.Secret) {
 			return fmt.Errorf("请填写 BotFather 提供的完整 Telegram Bot Token")

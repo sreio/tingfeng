@@ -7,7 +7,7 @@
 - HTTP JSON：GET / POST、参数、请求头、请求体、JSON 字段提取。
 - 静态网页：CSS 选择器提取文本或属性；RSS / Atom / RDF 订阅与新条目去重。
 - 分别配置采集与发送：变化、越过阈值、新条目、每 N 分钟/小时/天、每天定时；支持跨午夜时段。
-- 一人可绑定多个通知方式，每条提醒单独选择企业微信、钉钉、飞书、Telegram（电报）、Server 酱、SMTP 邮箱或自定义 Webhook。
+- 一人可绑定多个通知方式，每条提醒单独选择企业微信、钉钉、飞书、Telegram（电报）、Bark（仅 iOS）、Server 酱、SMTP 邮箱或自定义 Webhook。
 - 三步新建监控，内联创建接收人与渠道、真实采集测试、字段点选、规则试算、消息预览与真实发送测试。
 - 暂停、立即检查、复制草稿、多条提醒、异常状态、失败重试。
 - 可选历史、数据表、数值趋势、CSV；每个监控独立设置天数、条数上限、日志级别及记录阶段。
@@ -33,7 +33,17 @@
 | make build / make run | 构建单文件程序 / 本地运行 |
 | make test / make verify | 竞态及前端逻辑测试 / 测试、生产构建、go vet |
 
-`docker compose down -v` 会删除数据卷，请勿当作日常停止命令。
+### 更新版本并保留数据
+
+如果是从 Git 仓库用 `make up` 部署的，在**原项目目录**保留原来的 `.env`，沿用**同一个 Compose 项目名**。如果首次启动用过 `docker compose -p 名称`，先执行 `export COMPOSE_PROJECT_NAME=原来的名称`（替换成实际名称）。然后运行：
+
+```sh
+make backup && git pull --ff-only origin main && make up
+```
+
+`make backup` 会短暂停服，把整个 `/data`（包括 `tingfeng.db` 和 `master.key`）复制到宿主机的 `backups/时间戳/`，再启动原服务。备份成功才会拉取代码、重建容器。新版继续挂载原数据卷，管理员密码、监控、接收人、渠道密钥和设置都会保留；历史与发送记录仍按原保留策略清理。更新后用 `make status` 确认服务健康。
+
+日常停止可用 `make down`。**不要使用 `docker compose down -v`，它会删除数据卷。** 如果更新后意外出现首次初始化页面，先检查 Compose 项目名和挂载的卷，换了项目名可能会创建空卷。若新版迁移了数据库结构，回退时应使用旧版程序和**升级前的整份备份**，见[备份和恢复](#备份和恢复)。低配 VPS 若使用预构建镜像，同样先备份，再按下节方法加载新镜像并执行 `docker compose up -d --no-build`。
 
 ## VPS 与资源
 
@@ -113,6 +123,7 @@ ARM64 使用 linux/arm64。复制项目的 compose.yaml 和需要的 .env；镜�
 | 钉钉 | 机器人地址、可选签名密钥；有关键词限制时在消息模板包含关键词 |
 | 飞书 | 机器人地址和可选签名密钥 |
 | Telegram（电报） | 渠道填 Bot Token，每位接收人或群组分别填 Chat ID |
+| Bark（仅 iOS） | 每台 iPhone 一个渠道，填设备 Key；默认官方服务 `https://api.day.app`，可切换自建域名 |
 | Server 酱 | SCT 或 sctp 开头的 SendKey |
 | 邮箱 | SMTP 主机、端口、TLS / STARTTLS、发件地址和授权码；收件地址配置在接收人上 |
 | Webhook | 地址、POST / PUT、可选请求头和 JSON 模板 |
@@ -128,18 +139,19 @@ ARM64 使用 linux/arm64。复制项目的 compose.yaml 和需要的 .env；镜�
 3. 在「通知管理 → 接收人」绑定这个渠道，填写数字 Chat ID（群组可以是负数）。可从机器人收到的更新读取 `message.chat.id`，频道推送对应 `channel_post.chat.id`。使用 Webhook 接收 Telegram 更新的机器人可在自己的处理程序查看，使用轮询的机器人可通过 [getUpdates](https://core.telegram.org/bots/api#getupdates) 获取。公开频道也可以直接填 `@频道用户名`。
 4. 在监控的「发给谁」选中该通知方式，点击「发送测试通知」核对收件。一个 Bot Token 可供多个接收人使用。听风通过 HTTPS 向官方 API 发送纯文本，超出 4096 个字符时保留前 4095 个字符并加省略号。[Telegram 机器人说明](https://core.telegram.org/bots#how-do-bots-work) 和 [sendMessage 文档](https://core.telegram.org/bots/api#sendmessage)。
 
+**通过 Bark 在 iPhone 上接收提醒（仅 iOS）**
+
+1. 在 iPhone 上打开 [Bark](https://github.com/Finb/Bark)，允许通知，复制对应服务器的设备 Key。例如推送链接为 `https://api.day.app/<设备Key>/测试`，只取 `<设备Key>` 这一段。
+2. 在「通知管理 → 通知渠道 → 添加渠道」选择「Bark（仅 iOS）」，起名如“我的 iPhone”。默认使用官方服务，填设备 Key 即可。如果使用自建 Bark，先在 App 中添加同一台服务器，再在听风选择「自建服务」，填写域名（例如 `bark.example.com`，默认 HTTPS，也可带端口）和该服务器的 Key。不要填推送路径或参数；切换服务后需重新填写 Key。
+3. 点「发送测试消息」，在 iPhone 确认收到后保存。到「接收人」绑定这个渠道，再到监控的「发给谁」选中它。其他 iPhone 可各建一个渠道。已有 Bark Webhook 可以继续使用。
+
 消息支持 Go text/template，变量：.Title、.Monitor、.Value、.Previous、.Rule、.SourceURL、.SourceTime、.CollectedTime、.Text、.Items、.Fields、.Units、.RawFields。Webhook JSON 示例：
 
     {"title": {{json .Title}}, "content": {{json .Text}}, "value": {{json .Value}}}
 
 自由文本用 json 函数转义，不要直接加引号。邮箱强制加密连接并校验证书。
 
-**用现有 Webhook 发手机推送**。在「自定义请求格式」选择 POST，按下表填写地址和 JSON 消息模板。
-
-| 服务 | Webhook 地址 | JSON 消息模板 |
-| --- | --- | --- |
-| [Bark（iPhone）](https://github.com/Finb/Bark/blob/master/docs/tutorial.md) | Bark App 显示的服务地址加设备 Key，例如 `https://api.day.app/<设备Key>` | `{"title":{{json .Title}},"body":{{json .Text}}}` |
-| [ntfy](https://docs.ntfy.sh/publish/#publish-as-json) | ntfy 实例的根地址，例如 `https://ntfy.sh/` | `{"topic":"你的主题","title":{{json .Title}},"message":{{json .Text}}}` |
+使用 [ntfy](https://docs.ntfy.sh/publish/#publish-as-json) 时，在 Webhook 的「自定义请求格式」选择 POST，地址填实例根地址（例如 `https://ntfy.sh/`），JSON 模板填 `{"topic":"你的主题","title":{{json .Title}},"message":{{json .Text}}}`。
 
 正式通知先写入 SQLite 队列，有空位时立即并行投递。所有监控和通知渠道共用一个上限，默认同时发送 5 条。在「系统设置 → 运行与存储 → 通知发送并发数」可选择 1～20，选择后自动保存，重启后保留。调高会立即补充空位，调低会让在途通知完成，再按新上限领取。并行时到达顺序取决于渠道响应速度。
 

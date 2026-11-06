@@ -43,9 +43,9 @@ setup-token:
 reset-password:
 	$(COMPOSE) exec tingfeng /tingfeng reset-password --confirm
 backup:
-	@mkdir -p backups
+	@mkdir -p -m 700 backups
 	@stamp=$$(date +%Y%m%d-%H%M%S); \
 	$(COMPOSE) stop || exit 1; \
 	trap '$(COMPOSE) start >/dev/null' EXIT; \
 	$(COMPOSE) cp tingfeng:/data backups/$$stamp && \
-	echo "已备份到 backups/$$stamp。包含密钥，请私密保管。"
+	printf '已备份到 backups/%s。包含密钥，请私密保管。\n' "$$stamp"

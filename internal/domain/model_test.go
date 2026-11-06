@@ -56,6 +56,57 @@ func TestTargetsDeduplicateAndUnavailableChannelsDoNotBlockConfig(t *testing.T) 
 	}
 }
 
+func TestBarkKeyStaysWithItsServer(t *testing.T) {
+	const key = "fixture-device-key"
+	for _, server := range []string{"", "https://push.example:8443/"} {
+		c := testutil.Config("https://example.com", "")
+		c.Channels[0] = domain.Channel{ID: "ch", Name: "iPhone", Type: "bark", BarkServer: server, Secret: key, Enabled: true}
+		if err := domain.Validate(c); err != nil {
+			t.Fatal(err)
+		}
+		view := domain.Redacted(c)
+		raw, _ := json.Marshal(view)
+		if strings.Contains(string(raw), key) || view.Channels[0].BarkServer != server {
+			t.Fatal("device key exposed or public server lost")
+		}
+		same := domain.Clone(view)
+		domain.MergeSecrets(&same, c)
+		if same.Channels[0].Secret != key {
+			t.Fatal("unchanged server lost its device key")
+		}
+		switched := domain.Clone(view)
+		if server == "" {
+			switched.Channels[0].BarkServer = "https://push.example:8443"
+		} else {
+			switched.Channels[0].BarkServer = ""
+		}
+		domain.MergeSecrets(&switched, c)
+		if switched.Channels[0].Secret != "" || domain.Validate(switched) == nil {
+			t.Fatal("key reused after switching servers")
+		}
+		switched.Channels[0].Secret = "replacement-fixture"
+		if err := domain.Validate(switched); err != nil {
+			t.Fatal(err)
+		}
+		view.Channels[0].Enabled = false
+		if err := domain.Validate(view); err != nil {
+			t.Fatal("cannot restore a disabled channel without its key", err)
+		}
+	}
+	ch := domain.Channel{Type: "bark", Secret: key}
+	for _, invalid := range []string{"file:///tmp/example", "https://x.example/key", "https://user@x.example", "https://x.example/?key=s", "https://x.example/#fragment", "https://:1234"} {
+		ch.BarkServer = invalid
+		if domain.ValidateChannel(ch, true) == nil {
+			t.Fatal("non-origin Bark address accepted")
+		}
+	}
+	ch.BarkServer = ""
+	ch.Secret = "https://example.com/fixture"
+	if domain.ValidateChannel(ch, true) == nil {
+		t.Fatal("full push link accepted as a key")
+	}
+}
+
 func TestTelegramRecipientValidationAndSecretRoundTrip(t *testing.T) {
 	c := testutil.Config("https://example.com", "")
 	ch := &c.Channels[0]

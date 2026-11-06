@@ -4,7 +4,15 @@ import Dialog from './Dialog.vue';
 import Icon from './Icon.vue';
 import TelegramChatInput from './TelegramChatInput.vue';
 import { api } from '../lib/api.js';
-import { channelTypes, clone, newChannel, parsePairs, pairsText } from '../lib/model.js';
+import {
+  barkServerOrigin,
+  officialBarkServer,
+  channelTypes,
+  clone,
+  newChannel,
+  parsePairs,
+  pairsText
+} from '../lib/model.js';
 const webhookExample = '例如：{"content": {{json .Text}}}；使用 json 函数处理引号与换行。';
 const props = defineProps({ channel: Object, config: Object, defer: Boolean, initialName: String });
 const emit = defineEmits(['close', 'saved']);
@@ -21,10 +29,21 @@ const form = ref({
   testResult = ref(''),
   address = ref(''),
   testText = ref('');
-const headerText = ref(pairsText(form.value.headers)),
-  has = (k) => form.value.secretsSet?.includes(k);
-const needsURL = computed(() => !['email', 'serverchan', 'telegram'].includes(form.value.type));
+const headerText = ref(pairsText(form.value.headers));
+const customBark = ref(!!form.value.barkServer);
+const barkServer = computed(() =>
+  customBark.value ? barkServerOrigin(form.value.barkServer) : officialBarkServer
+);
+const has = (k) =>
+  form.value.secretsSet?.includes(k) &&
+  (k !== 'secret' ||
+    form.value.type !== 'bark' ||
+    barkServer.value === barkServerOrigin(props.channel?.barkServer || officialBarkServer));
+const needsURL = computed(
+  () => !['email', 'serverchan', 'telegram', 'bark'].includes(form.value.type)
+);
 const tokenFields = {
+  bark: { label: '设备 Key', hint: '填写 Bark App 中这台设备的 Key' },
   serverchan: { label: 'SendKey', hint: '支持 SCT 与 sctp 开头的 SendKey' },
   telegram: { label: 'Bot Token', hint: '粘贴 BotFather 提供的机器人令牌' }
 };
@@ -32,6 +51,8 @@ watch(
   () => form.value.type,
   () => {
     form.value.url = '';
+    form.value.barkServer = '';
+    customBark.value = false;
     form.value.secret = '';
     form.value.password = '';
     form.value.headers = {};
@@ -41,9 +62,20 @@ watch(
     testResult.value = '';
   }
 );
+watch([barkServer, () => form.value.secret], ([server], [previous]) => {
+  if (server !== previous && form.value.type === 'bark') form.value.secret = '';
+  testResult.value = '';
+});
 function prepared() {
   form.value.headers = parsePairs(headerText.value);
-  return clone(form.value);
+  const channel = clone(form.value);
+  if (channel.type === 'bark') {
+    if (!barkServer.value)
+      throw Error('请输入有效的 Bark 服务域名，可带端口，不含设备 Key 或推送路径。');
+    channel.barkServer = customBark.value ? barkServer.value : '';
+    if (!channel.secret && !has('secret')) throw Error('请填写所选 Bark 服务的设备 Key。');
+  }
+  return channel;
 }
 async function test() {
   error.value = '';
@@ -136,6 +168,27 @@ async function save() {
           :placeholder="has('url') ? '已安全保存，留空保持原地址' : '粘贴完整的 HTTP(S) 通知地址'"
         />
       </div>
+      <template v-if="form.type === 'bark'">
+        <div class="field">
+          <label for="bark-service">Bark 推送服务</label>
+          <select id="bark-service" v-model="customBark">
+            <option :value="false">官方服务（默认 · api.day.app）</option>
+            <option :value="true">自建服务</option>
+          </select>
+          <small>仅支持 iOS。请在 iPhone 安装 Bark 并允许通知。</small>
+        </div>
+        <div v-if="customBark" class="field">
+          <label for="bark-server">自建服务域名</label>
+          <input
+            id="bark-server"
+            v-model.trim="form.barkServer"
+            inputmode="url"
+            placeholder="bark.example.com"
+            required
+          />
+          <small>与 Bark App 中添加的服务器保持一致。默认使用 HTTPS，可指定端口。</small>
+        </div>
+      </template>
       <template v-if="form.type === 'email'"
         ><div class="two-fields">
           <div class="field">
@@ -191,7 +244,7 @@ async function save() {
           /></div
       ></template>
       <div
-        v-if="['dingtalk', 'feishu', 'serverchan', 'telegram'].includes(form.type)"
+        v-if="['dingtalk', 'feishu', 'serverchan', 'telegram', 'bark'].includes(form.type)"
         class="field"
       >
         <label for="channel-secret">{{
@@ -208,6 +261,10 @@ async function save() {
               : tokenFields[form.type]?.hint || '未启用签名时留空'
           "
         />
+        <small v-if="form.type === 'bark'"
+          >从 Bark App 复制对应服务器的设备 Key，只填 Key，不含域名。每台 iPhone
+          配一个渠道；更换服务器后需重新填写 Key。</small
+        >
         <small v-if="form.type === 'telegram'"
           >在 Telegram 向
           <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer">@BotFather</a>

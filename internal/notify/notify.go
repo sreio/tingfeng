@@ -135,14 +135,23 @@ func (s *Sender) Send(ctx context.Context, c domain.Channel, address string, p d
 	if c.Type == "email" {
 		return s.email(ctx, c, address, p, id)
 	}
-	rawURL := c.URL
+	rawURL := c.Endpoint()
 	method := "POST"
 	contentType := "application/json"
 	var body []byte
 	text := p.Text
 	payload := map[string]any{}
 	client := s.Client
+	// Both requests carry a provider credential; a redirect must not forward it or the message.
+	if c.Type == "telegram" || c.Type == "bark" {
+		client = &http.Client{Transport: s.Client.Transport, Timeout: s.Client.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}}
+	}
 	switch c.Type {
+	case "bark":
+		rawURL += "/push"
+		payload = map[string]any{"device_key": c.Secret, "title": p.Title, "body": text}
 	case "telegram":
 		chatID, err := domain.TelegramChatID(address)
 		if err != nil {
@@ -156,10 +165,6 @@ func (s *Sender) Send(ctx context.Context, c domain.Channel, address string, p d
 		}
 		rawURL = "https://api.telegram.org/bot" + c.Secret + "/sendMessage"
 		payload = map[string]any{"chat_id": chatID, "text": text}
-		// The token is in the request path. Keep the request and its content on the official endpoint.
-		client = &http.Client{Transport: s.Client.Transport, Timeout: s.Client.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		}}
 	case "wecom":
 		payload = map[string]any{"msgtype": "text", "text": map[string]string{"content": clip(text, 1900)}}
 	case "dingtalk":
@@ -234,6 +239,9 @@ func (s *Sender) Send(ctx context.Context, c domain.Channel, address string, p d
 		if c.Type == "telegram" {
 			return telegramError(resp.StatusCode)
 		}
+		if c.Type == "bark" {
+			return fmt.Errorf("Bark 服务返回 HTTP %d，请检查服务地址和设备 Key", resp.StatusCode)
+		}
 		return fmt.Errorf("通知服务返回 HTTP %d", resp.StatusCode)
 	}
 	if c.Type == "webhook" {
@@ -247,6 +255,16 @@ func (s *Sender) Send(ctx context.Context, c domain.Channel, address string, p d
 	var result map[string]json.RawMessage
 	if json.Unmarshal(data, &result) != nil {
 		return fmt.Errorf("通知服务未返回有效的确认结果")
+	}
+	if c.Type == "bark" {
+		var code int
+		if err := json.Unmarshal(result["code"], &code); err != nil || code == 0 {
+			return fmt.Errorf("Bark 服务没有返回有效的确认码")
+		}
+		if code != 200 {
+			return fmt.Errorf("Bark 返回错误码 %d，请检查服务地址和设备 Key", code)
+		}
+		return nil
 	}
 	if c.Type == "telegram" {
 		var ok bool

@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { addSourceField, enableFields, messageTemplate, primaryUnit } from './model.js';
+import {
+  addSourceField,
+  barkServerOrigin,
+  enableFields,
+  messageTemplate,
+  primaryUnit
+} from './model.js';
 import {
   defaults,
   targets,
@@ -28,6 +34,21 @@ const config = {
     }
   ]
 };
+test('Bark accepts a server domain and port; credentials and push URLs do not become server settings', () => {
+  assert.equal(barkServerOrigin('Bark.example:8443'), 'https://bark.example:8443');
+  assert.equal(barkServerOrigin('https://bark.example/'), 'https://bark.example');
+  assert.equal(barkServerOrigin('http://localhost:8080'), 'http://localhost:8080');
+  for (const value of [
+    '',
+    'bark.example/key',
+    'bark.example?device_key=test',
+    'https://user@bark.example',
+    'ftp://bark.example',
+    'bark.example#info'
+  ]) {
+    assert.equal(barkServerOrigin(value), '');
+  }
+});
 test('recipient defaults, disabled channels and duplicate targets', () => {
   assert.deepEqual(defaults(config.recipients[0], config), ['me:one']);
   assert.equal(targets(config, ['me:one', 'me:one', 'me:two', 'gone:one']).length, 1);

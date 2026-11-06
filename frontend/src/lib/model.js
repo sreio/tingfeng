@@ -10,11 +10,22 @@ export const channelTypes = [
   { id: 'dingtalk', name: '钉钉', mark: '钉', color: 'sky' },
   { id: 'feishu', name: '飞书', mark: '飞', color: 'purple' },
   { id: 'telegram', name: 'Telegram（电报）', mark: 'TG', color: 'sky' },
+  { id: 'bark', name: 'Bark（仅 iOS）', mark: 'B', color: 'green' },
   { id: 'email', name: '邮箱', mark: '@', color: 'orange' },
   { id: 'serverchan', name: 'Server 酱', mark: 'S', color: 'green' },
   { id: 'webhook', name: 'Webhook', mark: '{}', color: 'slate' }
 ];
 export const typeInfo = (t) => channelTypes.find((c) => c.id === t) || channelTypes.at(-1);
+export const officialBarkServer = 'https://api.day.app';
+export function barkServerOrigin(value) {
+  if (!value || /[\s\\?#@]/.test(value)) return '';
+  try {
+    const u = new URL(value.includes('://') ? value : 'https://' + value);
+    return ['https:', 'http:'].includes(u.protocol) && u.pathname === '/' ? u.origin : '';
+  } catch {
+    return '';
+  }
+}
 export const sourceInfo = (t) => sourceTypes.find((s) => s.id === t) || sourceTypes[0];
 export const newRule = () => ({
   id: uid('rule'),

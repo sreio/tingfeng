@@ -102,6 +102,7 @@ type Channel struct {
 	Type         string            `json:"type"`
 	Enabled      bool              `json:"enabled"`
 	URL          string            `json:"url,omitempty"`
+	BarkServer   string            `json:"barkServer,omitempty"`
 	Secret       string            `json:"secret,omitempty"`
 	Host         string            `json:"host,omitempty"`
 	Port         int               `json:"port,omitempty"`
@@ -115,6 +116,18 @@ type Channel struct {
 	SecretsSet   []string          `json:"secretsSet,omitempty"`
 	ClearSecrets bool              `json:"clearSecrets,omitempty"`
 }
+
+// Bark's public server address is editable separately from its write-only device key.
+func (c Channel) Endpoint() string {
+	if c.Type != "bark" {
+		return c.URL
+	}
+	if c.BarkServer == "" {
+		return "https://api.day.app"
+	}
+	return strings.TrimSuffix(c.BarkServer, "/")
+}
+
 type Target struct {
 	Key     string
 	Person  Recipient
@@ -326,13 +339,14 @@ func MergeSecrets(next *Config, old Config) {
 			if n.URL == "" {
 				n.URL = o.URL
 			}
-			if n.Secret == "" && sameOrigin(n.URL, o.URL) {
+			keepAuth := sameOrigin(n.Endpoint(), o.Endpoint())
+			if n.Secret == "" && keepAuth {
 				n.Secret = o.Secret
 			}
 			if n.Password == "" && n.Host == o.Host && n.User == o.User {
 				n.Password = o.Password
 			}
-			if len(n.Headers) == 0 && sameOrigin(n.URL, o.URL) {
+			if len(n.Headers) == 0 && keepAuth {
 				n.Headers = o.Headers
 			}
 		}
