@@ -2,6 +2,7 @@
 import { computed, inject, ref, watch } from 'vue';
 import Dialog from './Dialog.vue';
 import Icon from './Icon.vue';
+import TelegramChatInput from './TelegramChatInput.vue';
 import { api } from '../lib/api.js';
 import { channelTypes, clone, newChannel, parsePairs, pairsText } from '../lib/model.js';
 const webhookExample = '例如：{"content": {{json .Text}}}；使用 json 函数处理引号与换行。';
@@ -22,7 +23,11 @@ const form = ref({
   testText = ref('');
 const headerText = ref(pairsText(form.value.headers)),
   has = (k) => form.value.secretsSet?.includes(k);
-const needsURL = computed(() => !['email', 'serverchan'].includes(form.value.type));
+const needsURL = computed(() => !['email', 'serverchan', 'telegram'].includes(form.value.type));
+const tokenFields = {
+  serverchan: { label: 'SendKey', hint: '支持 SCT 与 sctp 开头的 SendKey' },
+  telegram: { label: 'Bot Token', hint: '粘贴 BotFather 提供的机器人令牌' }
+};
 watch(
   () => form.value.type,
   () => {
@@ -32,6 +37,7 @@ watch(
     form.value.headers = {};
     form.value.secretsSet = [];
     headerText.value = '';
+    address.value = '';
     testResult.value = '';
   }
 );
@@ -45,6 +51,8 @@ async function test() {
   let channel;
   try {
     channel = prepared();
+    if (channel.type === 'telegram' && !address.value)
+      throw Error('请填写测试接收对话的 Chat ID。');
   } catch (e) {
     error.value = e.message;
     return;
@@ -71,8 +79,8 @@ async function save() {
     if (needsURL.value && !channel.url && !has('url')) throw Error('请填写通知地址。');
     if (channel.type === 'email' && (!channel.host || !channel.sender))
       throw Error('请填写 SMTP 服务地址和发件邮箱。');
-    if (channel.type === 'serverchan' && !channel.secret && !has('secret'))
-      throw Error('请填写 SendKey。');
+    if (tokenFields[channel.type] && !channel.secret && !has('secret'))
+      throw Error('请填写 ' + tokenFields[channel.type].label + '。');
   } catch (e) {
     error.value = e.message;
     return;
@@ -182,9 +190,12 @@ async function save() {
             :placeholder="has('password') ? '已安全保存，留空保持原值' : '填写邮箱授权码'"
           /></div
       ></template>
-      <div v-if="['dingtalk', 'feishu', 'serverchan'].includes(form.type)" class="field">
+      <div
+        v-if="['dingtalk', 'feishu', 'serverchan', 'telegram'].includes(form.type)"
+        class="field"
+      >
         <label for="channel-secret">{{
-          form.type === 'serverchan' ? 'SendKey' : '签名密钥（机器人启用加签时填写）'
+          tokenFields[form.type]?.label || '签名密钥（机器人启用加签时填写）'
         }}</label
         ><input
           id="channel-secret"
@@ -194,11 +205,14 @@ async function save() {
           :placeholder="
             has('secret')
               ? '已安全保存，留空保持原值'
-              : form.type === 'serverchan'
-                ? '支持 SCT 与 sctp 开头的 SendKey'
-                : '未启用签名时留空'
+              : tokenFields[form.type]?.hint || '未启用签名时留空'
           "
         />
+        <small v-if="form.type === 'telegram'"
+          >在 Telegram 向
+          <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer">@BotFather</a>
+          发送 /newbot 获取令牌。接收人的 Chat ID 在绑定通知方式时填写。</small
+        >
       </div>
       <details v-if="form.type === 'webhook'" class="advanced">
         <summary>自定义请求格式 <span>可选</span><Icon name="down" :size="16" /></summary>
@@ -246,6 +260,11 @@ async function save() {
               placeholder="me@example.com"
             />
           </div>
+          <TelegramChatInput
+            v-else-if="form.type === 'telegram'"
+            v-model="address"
+            label="测试 Chat ID"
+          />
           <div class="field">
             <label for="test-message">测试消息（可选）</label
             ><input

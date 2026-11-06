@@ -55,3 +55,51 @@ func TestTargetsDeduplicateAndUnavailableChannelsDoNotBlockConfig(t *testing.T) 
 		t.Fatal("dangling recipient reference accepted")
 	}
 }
+
+func TestTelegramRecipientValidationAndSecretRoundTrip(t *testing.T) {
+	c := testutil.Config("https://example.com", "")
+	ch := &c.Channels[0]
+	ch.Type = "telegram"
+	ch.Secret = "42:fixture_only"
+	method := &c.Recipients[0].Methods[0]
+	for _, address := range []string{"1234567890", "-1001234567890", "@example_channel"} {
+		method.Address = address
+		if err := domain.Validate(c); err != nil {
+			t.Fatal("valid Telegram recipient rejected", err)
+		}
+	}
+	for _, address := range []string{"", "0", "12.34", "99999999999999999999", "@", "https://t.me/example", "user@example.com"} {
+		method.Address = address
+		if domain.Validate(c) == nil {
+			t.Fatal("invalid Telegram recipient accepted")
+		}
+	}
+	method.Address = "-1001234567890"
+	public := domain.Redacted(c)
+	raw, _ := json.Marshal(public)
+	if strings.Contains(string(raw), ch.Secret) || public.Channels[0].Secret != "" {
+		t.Fatal("bot token exposed in config or backup")
+	}
+	domain.MergeSecrets(&public, c)
+	if public.Channels[0].Secret != ch.Secret {
+		t.Fatal("metadata edit discarded the saved token")
+	}
+	converted := domain.Redacted(c)
+	converted.Channels[0].Type = "webhook"
+	converted.Channels[0].URL = "https://other.example/send"
+	domain.MergeSecrets(&converted, c)
+	if converted.Channels[0].Secret != "" {
+		t.Fatal("channel type change inherited a Telegram token")
+	}
+	for _, invalid := range []string{"", "invalid", "42:bad/path", "42:bad?key=x"} {
+		ch.Secret = invalid
+		if domain.ValidateChannel(*ch, true) == nil {
+			t.Fatal("invalid token accepted")
+		}
+	}
+	ch.Enabled = false
+	ch.Secret = ""
+	if err := domain.Validate(c); err != nil {
+		t.Fatal("restored disabled channel requires a token", err)
+	}
+}

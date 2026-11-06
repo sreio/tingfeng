@@ -61,7 +61,8 @@ function toggle(p) {
             :value="p.id + ':' + m.id"
             :disabled="!channel(m.channelId)?.enabled"
           />{{ channel(m.channelId)?.name || '渠道已删除'
-          }}<small>{{
+          }}<small v-if="channel(m.channelId)?.type === 'telegram'">{{ m.address }}</small
+          ><small>{{
             !channel(m.channelId)?.enabled ? '已停用' : m.default ? '默认' : ''
           }}</small></label
         >

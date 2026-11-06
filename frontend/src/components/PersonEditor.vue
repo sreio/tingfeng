@@ -2,8 +2,9 @@
 import { computed, inject, ref } from 'vue';
 import Dialog from './Dialog.vue';
 import ChannelEditor from './ChannelEditor.vue';
+import TelegramChatInput from './TelegramChatInput.vue';
 import Icon from './Icon.vue';
-import { clone, newPerson, uid, newChannel } from '../lib/model.js';
+import { clone, newPerson, uid } from '../lib/model.js';
 const props = defineProps({ person: Object, config: Object });
 const emit = defineEmits(['close', 'saved']);
 const saveConfig = inject('saveConfig'),
@@ -15,6 +16,11 @@ const form = ref(clone(props.person || newPerson())),
   channelOpen = ref(false),
   methodIndex = ref(-1);
 const channels = computed(() => [...props.config.channels, ...pending.value]);
+const channelType = (id) => channels.value.find((c) => c.id === id)?.type;
+function selectChannel(method, id) {
+  if (channelType(method.channelId) !== channelType(id)) method.address = '';
+  method.channelId = id;
+}
 function addMethod() {
   form.value.methods.push({ id: uid('method'), channelId: '', address: '', default: true });
 }
@@ -25,7 +31,7 @@ function newRobot() {
 }
 function bind(channel) {
   pending.value.push(channel);
-  form.value.methods[methodIndex.value].channelId = channel.id;
+  selectChannel(form.value.methods[methodIndex.value], channel.id);
   channelOpen.value = false;
 }
 async function save() {
@@ -43,9 +49,7 @@ async function save() {
   }
   if (
     form.value.methods.some(
-      (m) =>
-        channels.value.find((c) => c.id === m.channelId)?.type === 'email' &&
-        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(m.address)
+      (m) => channelType(m.channelId) === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(m.address)
     )
   ) {
     error.value = '请输入有效的接收邮箱。';
@@ -123,7 +127,11 @@ async function save() {
         </div>
         <div class="field">
           <label :for="'person-channel-' + i">通知渠道</label
-          ><select :id="'person-channel-' + i" v-model="m.channelId">
+          ><select
+            :id="'person-channel-' + i"
+            :value="m.channelId"
+            @change="selectChannel(m, $event.target.value)"
+          >
             <option value="" disabled>选择已配置的渠道</option>
             <option v-for="c in channels" :key="c.id" :value="c.id">
               {{ c.name }}{{ c.enabled ? '' : '（已停用）' }}
@@ -139,7 +147,7 @@ async function save() {
             没有合适的？新建渠道
           </button>
         </div>
-        <div v-if="channels.find((c) => c.id === m.channelId)?.type === 'email'" class="field">
+        <div v-if="channelType(m.channelId) === 'email'" class="field">
           <label :for="'person-email-' + i">接收邮箱</label
           ><input
             :id="'person-email-' + i"
@@ -149,6 +157,12 @@ async function save() {
             required
           />
         </div>
+        <TelegramChatInput
+          v-else-if="channelType(m.channelId) === 'telegram'"
+          v-model="m.address"
+          label="接收 Chat ID"
+          required
+        />
         <label class="checkbox-row"
           ><input type="checkbox" v-model="m.default" /><span>作为这个人的默认通知方式</span></label
         >

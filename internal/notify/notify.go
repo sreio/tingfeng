@@ -141,7 +141,25 @@ func (s *Sender) Send(ctx context.Context, c domain.Channel, address string, p d
 	var body []byte
 	text := p.Text
 	payload := map[string]any{}
+	client := s.Client
 	switch c.Type {
+	case "telegram":
+		chatID, err := domain.TelegramChatID(address)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(text) == "" {
+			return fmt.Errorf("Telegram 消息为空，请检查消息模板")
+		}
+		if utf8.RuneCountInString(text) > 4096 {
+			text = string([]rune(text)[:4095]) + "…"
+		}
+		rawURL = "https://api.telegram.org/bot" + c.Secret + "/sendMessage"
+		payload = map[string]any{"chat_id": chatID, "text": text}
+		// The token is in the request path. Keep the request and its content on the official endpoint.
+		client = &http.Client{Transport: s.Client.Transport, Timeout: s.Client.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}}
 	case "wecom":
 		payload = map[string]any{"msgtype": "text", "text": map[string]string{"content": clip(text, 1900)}}
 	case "dingtalk":
@@ -207,12 +225,15 @@ func (s *Sender) Send(ctx context.Context, c domain.Channel, address string, p d
 	for k, v := range c.Headers {
 		req.Header.Set(k, v)
 	}
-	resp, e := s.Client.Do(req)
+	resp, e := client.Do(req)
 	if e != nil {
 		return fmt.Errorf("%s", secure.SafeError(e))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if c.Type == "telegram" {
+			return telegramError(resp.StatusCode)
+		}
 		return fmt.Errorf("通知服务返回 HTTP %d", resp.StatusCode)
 	}
 	if c.Type == "webhook" {
@@ -226,6 +247,15 @@ func (s *Sender) Send(ctx context.Context, c domain.Channel, address string, p d
 	var result map[string]json.RawMessage
 	if json.Unmarshal(data, &result) != nil {
 		return fmt.Errorf("通知服务未返回有效的确认结果")
+	}
+	if c.Type == "telegram" {
+		var ok bool
+		if json.Unmarshal(result["ok"], &ok) == nil && ok {
+			return nil
+		}
+		var code int
+		_ = json.Unmarshal(result["error_code"], &code)
+		return telegramError(code)
 	}
 	keys := []string{"errcode"}
 	if c.Type == "feishu" {
@@ -251,4 +281,21 @@ func (s *Sender) Send(ctx context.Context, c domain.Channel, address string, p d
 		return fmt.Errorf("通知服务没有明确确认成功")
 	}
 	return nil
+}
+
+func telegramError(code int) error {
+	switch code {
+	case 400:
+		return fmt.Errorf("Telegram 拒绝了消息，请核对 Chat ID。私聊请先向机器人发送 /start")
+	case 401, 404:
+		return fmt.Errorf("Telegram 机器人认证失败，请核对 Bot Token")
+	case 403:
+		return fmt.Errorf("Telegram 拒绝发送，请检查机器人是否被屏蔽或缺少发言权限")
+	case 429:
+		return fmt.Errorf("Telegram 发送频率受限，请稍后再试")
+	case 0:
+		return fmt.Errorf("Telegram 未明确确认发送成功")
+	default:
+		return fmt.Errorf("Telegram 发送失败（错误码 %d）", code)
+	}
 }

@@ -9,11 +9,12 @@ export const channelTypes = [
   { id: 'wecom', name: '企业微信', mark: '企', color: 'blue' },
   { id: 'dingtalk', name: '钉钉', mark: '钉', color: 'sky' },
   { id: 'feishu', name: '飞书', mark: '飞', color: 'purple' },
+  { id: 'telegram', name: 'Telegram（电报）', mark: 'TG', color: 'sky' },
   { id: 'email', name: '邮箱', mark: '@', color: 'orange' },
   { id: 'serverchan', name: 'Server 酱', mark: 'S', color: 'green' },
   { id: 'webhook', name: 'Webhook', mark: '{}', color: 'slate' }
 ];
-export const typeInfo = (t) => channelTypes.find((c) => c.id === t) || channelTypes[5];
+export const typeInfo = (t) => channelTypes.find((c) => c.id === t) || channelTypes.at(-1);
 export const sourceInfo = (t) => sourceTypes.find((s) => s.id === t) || sourceTypes[0];
 export const newRule = () => ({
   id: uid('rule'),

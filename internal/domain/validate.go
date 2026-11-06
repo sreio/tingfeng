@@ -7,6 +7,7 @@ import (
 	"net/mail"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -14,6 +15,8 @@ import (
 
 var identifier = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,100}$`)
 var clock = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
+var telegramToken = regexp.MustCompile(`^[0-9]+:[A-Za-z0-9_-]+$`)
+var telegramUsername = regexp.MustCompile(`^@[A-Za-z0-9_]{1,32}$`)
 
 func validID(s string) bool { return identifier.MatchString(s) }
 func named(id, name string, seen map[string]bool) error {
@@ -139,6 +142,19 @@ func ValidateRule(r Rule) error {
 	return nil
 }
 func ClockMinutes(s string) int { var h, m int; _, _ = fmt.Sscanf(s, "%d:%d", &h, &m); return h*60 + m }
+
+// Telegram expects a numeric chat ID or a public channel/supergroup username.
+func TelegramChatID(address string) (any, error) {
+	if telegramUsername.MatchString(address) {
+		return address, nil
+	}
+	id, err := strconv.ParseInt(address, 10, 64)
+	if err == nil && id != 0 {
+		return id, nil
+	}
+	return nil, fmt.Errorf("请填写有效的 Telegram Chat ID，私聊或群组可填数字，公开频道可填 @频道用户名")
+}
+
 func ValidateChannel(c Channel, requireSecrets bool) error {
 	if c.Type == "email" {
 		if c.Host == "" || strings.ContainsAny(c.Host, "/\\ \r\n") || !integer(c.Port, 1, 65535) {
@@ -149,6 +165,10 @@ func ValidateChannel(c Channel, requireSecrets bool) error {
 		}
 		if c.TLS != "tls" && c.TLS != "starttls" {
 			return fmt.Errorf("SMTP 必须启用 TLS 或 STARTTLS")
+		}
+	} else if c.Type == "telegram" {
+		if (requireSecrets || c.Secret != "") && !telegramToken.MatchString(c.Secret) {
+			return fmt.Errorf("请填写 BotFather 提供的完整 Telegram Bot Token")
 		}
 	} else if c.Type == "serverchan" {
 		if requireSecrets && c.Secret == "" {
@@ -235,6 +255,11 @@ func Validate(c Config) error {
 			if ch.Type == "email" {
 				if _, e := mail.ParseAddress(m.Address); e != nil || strings.ContainsAny(m.Address, "\r\n") {
 					return fmt.Errorf("请为「%s」填写有效的接收邮箱", p.Name)
+				}
+			}
+			if ch.Type == "telegram" {
+				if _, err := TelegramChatID(m.Address); err != nil {
+					return fmt.Errorf("接收人「%s」：%w", p.Name, err)
 				}
 			}
 			if len(m.Address) > 320 {
