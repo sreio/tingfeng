@@ -148,6 +148,7 @@ func (s *Store) Config(ctx context.Context) (domain.Config, error) {
 		return domain.Config{}, e
 	}
 	var c domain.Config
+	c.Settings.DeliveryConcurrency = domain.DefaultDeliveryConcurrency
 	e = json.Unmarshal(raw, &c)
 	return c, e
 }

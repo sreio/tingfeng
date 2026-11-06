@@ -284,6 +284,7 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
 	var c domain.Config
+	c.Settings.DeliveryConcurrency = s.Engine.DeliveryConcurrency()
 	if !decode(w, r, &c) {
 		return
 	}
@@ -453,7 +454,7 @@ func (s *Server) retry(w http.ResponseWriter, r *http.Request) {
 		failure(w, 400, "关联监控或渠道已变更，请检查配置后等待新的提醒")
 		return
 	}
-	if e = s.Engine.Store.Retry(r.Context(), d.ID); e != nil {
+	if e = s.Engine.RetryDelivery(r.Context(), d.ID); e != nil {
 		failure(w, 400, e.Error())
 		return
 	}

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -116,6 +117,9 @@ func TestDeliveryRetryLeaseAndRetention(t *testing.T) {
 	if _, e = s.ClaimDelivery(ctx, time.Now().UnixMilli()); e == nil {
 		t.Fatal("lease stolen")
 	}
+	if _, e = s.ClaimDelivery(ctx, time.Now().Add(2*time.Minute).UnixMilli(), row.ID); !errors.Is(e, sql.ErrNoRows) {
+		t.Fatal("expired lease was reclaimed while the original sender was active", e)
+	}
 	row, e = s.ClaimDelivery(ctx, time.Now().Add(2*time.Minute).UnixMilli())
 	if e != nil || row.Attempts != 2 {
 		t.Fatal("expired lease not reclaimed", e)
@@ -132,5 +136,24 @@ func TestDeliveryRetryLeaseAndRetention(t *testing.T) {
 	p, _ = s.Deliveries(ctx, "mon", "", 1, 25)
 	if p.Total != 0 {
 		t.Fatal("old deliveries retained")
+	}
+}
+
+func TestOldSettingsUseDefaultDeliveryConcurrency(t *testing.T) {
+	s, err := Open(t.TempDir(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	sealed, err := s.box.Seal([]byte(`{"revision":1,"settings":{"timeZone":"UTC"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.DB.Exec("INSERT INTO config(id,revision,body) VALUES(1,1,?)", sealed); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := s.Config(context.Background())
+	if err != nil || cfg.Settings.DeliveryConcurrency != 5 || cfg.Settings.TimeZone != "UTC" {
+		t.Fatal("existing database lost its settings or did not receive the default", err)
 	}
 }

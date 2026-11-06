@@ -44,6 +44,7 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request) {
 		Preview  bool       `json:"preview"`
 		Revision int64      `json:"revision"`
 	}
+	v.Backup.Config.Settings.DeliveryConcurrency = s.Engine.DeliveryConcurrency()
 	if !decode(w, r, &v) {
 		return
 	}

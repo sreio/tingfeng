@@ -19,14 +19,15 @@ type Config struct {
 	Settings   Settings    `json:"settings"`
 }
 type Settings struct {
-	AllowPrivate *bool  `json:"allowPrivate,omitempty"`
-	TimeZone     string `json:"timeZone"`
-	HistoryDays  int    `json:"historyDays"`
-	MaxRows      int    `json:"maxRows"`
-	LogLevel     string `json:"logLevel"`
-	LogDays      int    `json:"logDays"`
-	DeliveryDays int    `json:"deliveryDays"`
-	DiskLimitMB  int    `json:"diskLimitMB"`
+	AllowPrivate        *bool  `json:"allowPrivate,omitempty"`
+	DeliveryConcurrency int    `json:"deliveryConcurrency"`
+	TimeZone            string `json:"timeZone"`
+	HistoryDays         int    `json:"historyDays"`
+	MaxRows             int    `json:"maxRows"`
+	LogLevel            string `json:"logLevel"`
+	LogDays             int    `json:"logDays"`
+	DeliveryDays        int    `json:"deliveryDays"`
+	DiskLimitMB         int    `json:"diskLimitMB"`
 }
 type Monitor struct {
 	ID          string  `json:"id"`
@@ -223,8 +224,12 @@ func ID(prefix string) string {
 	}
 	return prefix + "_" + hex.EncodeToString(b)
 }
+
+const DefaultDeliveryConcurrency = 5
+const MaxDeliveryConcurrency = 20
+
 func DefaultSettings() Settings {
-	return Settings{TimeZone: "Asia/Shanghai", HistoryDays: 7, MaxRows: 10000, LogLevel: "error", LogDays: 3, DeliveryDays: 7, DiskLimitMB: 200}
+	return Settings{TimeZone: "Asia/Shanghai", HistoryDays: 7, MaxRows: 10000, LogLevel: "error", LogDays: 3, DeliveryDays: 7, DiskLimitMB: 200, DeliveryConcurrency: DefaultDeliveryConcurrency}
 }
 func EmptyConfig() Config {
 	return Config{Revision: 1, Monitors: []Monitor{}, Recipients: []Recipient{}, Channels: []Channel{}, Settings: DefaultSettings()}

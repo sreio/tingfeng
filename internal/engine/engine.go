@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -17,16 +18,17 @@ import (
 )
 
 type Engine struct {
-	Store       *storage.Store
-	Fetcher     *source.Fetcher
-	Sender      *notify.Sender
-	mu          sync.RWMutex
-	cfg         domain.Config
-	slots       chan struct{}
-	locks       sync.Map
-	wg          sync.WaitGroup
-	wake        chan struct{}
-	lastCleanup time.Time
+	Store        *storage.Store
+	Fetcher      *source.Fetcher
+	Sender       *notify.Sender
+	mu           sync.RWMutex
+	cfg          domain.Config
+	slots        chan struct{}
+	locks        sync.Map
+	wg           sync.WaitGroup
+	wake         chan struct{}
+	deliveryWake chan struct{}
+	lastCleanup  time.Time
 }
 
 func New(s *storage.Store, f *source.Fetcher, n *notify.Sender, workers int) (*Engine, error) {
@@ -34,8 +36,11 @@ func New(s *storage.Store, f *source.Fetcher, n *notify.Sender, workers int) (*E
 	if e != nil {
 		return nil, e
 	}
+	if err := domain.ValidateDeliveryConcurrency(c.Settings.DeliveryConcurrency); err != nil {
+		return nil, err
+	}
 	n.Network.ConfigurePrivate(c.Settings.AllowPrivate)
-	return &Engine{Store: s, Fetcher: f, Sender: n, cfg: c, slots: make(chan struct{}, workers), wake: make(chan struct{}, 1)}, nil
+	return &Engine{Store: s, Fetcher: f, Sender: n, cfg: c, slots: make(chan struct{}, workers), wake: make(chan struct{}, 1), deliveryWake: make(chan struct{}, 1)}, nil
 }
 func (e *Engine) Config() domain.Config {
 	e.mu.RLock()
@@ -71,6 +76,7 @@ func (e *Engine) SaveConfig(ctx context.Context, c domain.Config) (domain.Config
 	}
 	e.cfg = c
 	e.Sender.Network.ConfigurePrivate(c.Settings.AllowPrivate)
+	e.wakeDeliveries()
 	select {
 	case e.wake <- struct{}{}:
 	default:
@@ -82,7 +88,7 @@ func (e *Engine) lock(id string) *sync.Mutex {
 	return v.(*sync.Mutex)
 }
 func (e *Engine) Start(ctx context.Context) {
-	e.wg.Add(2)
+	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
 		timer := time.NewTicker(time.Second)
@@ -98,23 +104,7 @@ func (e *Engine) Start(ctx context.Context) {
 			}
 		}
 	}()
-	go func() {
-		defer e.wg.Done()
-		timer := time.NewTicker(time.Second)
-		defer timer.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-timer.C:
-				for i := 0; i < 4; i++ {
-					if !e.DeliverOne(ctx) {
-						break
-					}
-				}
-			}
-		}
-	}()
+	e.wg.Go(func() { e.dispatchDeliveries(ctx) })
 }
 func (e *Engine) Wait() { e.wg.Wait() }
 func (e *Engine) tick(ctx context.Context, now time.Time) {
@@ -330,6 +320,9 @@ func (e *Engine) check(ctx context.Context, id string) (domain.Runtime, error) {
 		_ = e.Store.SaveRun(ctx, rt, nil, nil, nil, false, m.Storage)
 		return rt, fmt.Errorf("运行结果保存失败，请检查磁盘或队列")
 	}
+	if len(ds) > 0 {
+		e.wakeDeliveries()
+	}
 	return rt, nil
 }
 func newDelivery(m domain.Monitor, r domain.Rule, t domain.Target, p domain.Payload, at int64, slot string) domain.Delivery {
@@ -408,31 +401,99 @@ func (e *Engine) sendDue(ctx context.Context, id string, now time.Time) error {
 	if !ok || current.Generation != m.Generation {
 		return nil
 	}
-	return e.Store.SaveRun(ctx, rt, nil, nil, ds, false, m.Storage)
+	err = e.Store.SaveRun(ctx, rt, nil, nil, ds, false, m.Storage)
+	if err == nil && len(ds) > 0 {
+		e.wakeDeliveries()
+	}
+	return err
 }
-func (e *Engine) DeliverOne(ctx context.Context) bool {
-	d, err := e.Store.ClaimDelivery(ctx, time.Now().UnixMilli())
-	if errors.Is(err, sql.ErrNoRows) || ctx.Err() != nil {
-		return false
+func (e *Engine) DeliveryConcurrency() int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.cfg.Settings.DeliveryConcurrency
+}
+
+func (e *Engine) wakeDeliveries() {
+	select {
+	case e.deliveryWake <- struct{}{}:
+	default:
 	}
+}
+
+func (e *Engine) RetryDelivery(ctx context.Context, id string) error {
+	if err := e.Store.Retry(ctx, id); err != nil {
+		return err
+	}
+	e.wakeDeliveries()
+	return nil
+}
+
+func (e *Engine) dispatchDeliveries(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	finished := make(chan string, domain.MaxDeliveryConcurrency)
+	var inFlight []string
+	for ctx.Err() == nil {
+		if d, ok := e.claimDelivery(ctx, inFlight); ok {
+			inFlight = append(inFlight, d.ID)
+			e.wg.Go(func() {
+				e.deliver(ctx, d)
+				finished <- d.ID
+			})
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C: // Retries and interrupted deliveries become due with time.
+		case <-e.deliveryWake:
+		case id := <-finished:
+			inFlight = slices.DeleteFunc(inFlight, func(active string) bool { return active == id })
+		}
+	}
+}
+
+func (e *Engine) claimDelivery(ctx context.Context, inFlight []string) (domain.Delivery, bool) {
+	// Admit work under the settings lock so a saved lower limit applies to the next claim.
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if len(inFlight) >= e.cfg.Settings.DeliveryConcurrency {
+		return domain.Delivery{}, false
+	}
+	d, err := e.Store.ClaimDelivery(ctx, time.Now().UnixMilli(), inFlight...)
 	if err != nil {
-		slog.Error("投递队列读取失败")
-		return false
+		if !errors.Is(err, sql.ErrNoRows) && ctx.Err() == nil {
+			slog.Error("投递队列读取失败")
+		}
+		return domain.Delivery{}, false
 	}
+	return d, true
+}
+
+func (e *Engine) DeliverOne(ctx context.Context) bool {
+	d, ok := e.claimDelivery(ctx, nil)
+	if ok {
+		e.deliver(ctx, d)
+	}
+	return ok
+}
+
+func (e *Engine) deliver(ctx context.Context, d domain.Delivery) {
 	c := e.Config()
 	m, ok := c.FindMonitor(d.MonitorID)
 	if !ok || !m.Enabled || m.Generation != d.Generation {
 		_ = e.Store.CancelDelivery(ctx, d.ID, "监控已删除、修改或暂停")
-		return true
+		return
 	}
 	loc, _ := time.LoadLocation(c.Settings.TimeZone)
 	for _, rule := range m.Rules {
 		if rule.ID == d.RuleID && !withinWindow(rule, time.Now(), loc) {
 			_ = e.Store.CancelDelivery(ctx, d.ID, "已超出发送时段，等待下一次提醒")
-			return true
+			return
 		}
 	}
 	targets := c.Targets([]string{d.Target})
+	var err error
 	if len(targets) == 0 {
 		err = fmt.Errorf("通知方式不可用")
 	} else {
@@ -472,7 +533,6 @@ func (e *Engine) DeliverOne(ctx context.Context) bool {
 		}
 		e.mu.RUnlock()
 	}
-	return true
 }
 
 func (e *Engine) Preview(ctx context.Context, s domain.Source) (source.Preview, error) {

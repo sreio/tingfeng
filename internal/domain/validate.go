@@ -180,11 +180,21 @@ func ValidateChannel(c Channel, requireSecrets bool) error {
 	}
 	return nil
 }
+func ValidateDeliveryConcurrency(n int) error {
+	if !integer(n, 1, MaxDeliveryConcurrency) {
+		return fmt.Errorf("通知发送并发数必须为 1～%d 的整数", MaxDeliveryConcurrency)
+	}
+	return nil
+}
+
 func Validate(c Config) error {
 	if len(c.Monitors) > 500 || len(c.Recipients) > 500 || len(c.Channels) > 500 {
 		return fmt.Errorf("单实例最多配置各 500 项")
 	}
 	st := c.Settings
+	if err := ValidateDeliveryConcurrency(st.DeliveryConcurrency); err != nil {
+		return err
+	}
 	if _, e := time.LoadLocation(st.TimeZone); e != nil {
 		return fmt.Errorf("时区无效")
 	}

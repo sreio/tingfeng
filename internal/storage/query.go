@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 	"tingfeng/internal/domain"
 )
@@ -119,9 +120,20 @@ func (s *Store) Deliveries(ctx context.Context, id, status string, page, size in
 	}
 	return p, rows.Err()
 }
-func (s *Store) ClaimDelivery(ctx context.Context, at int64) (domain.Delivery, error) {
-	// A lease recovers an interrupted HTTP request after restart. Provider acknowledgements are not transactional with SQLite.
-	return scanDelivery(s.DB.QueryRowContext(ctx, "UPDATE deliveries SET status='sending',attempts=attempts+1,updated_at=?,next_attempt=? WHERE id=(SELECT id FROM deliveries WHERE status IN ('pending','sending') AND next_attempt<=? ORDER BY next_attempt LIMIT 1) RETURNING "+deliveryColumns, at, at+60000, at))
+func (s *Store) ClaimDelivery(ctx context.Context, at int64, inFlight ...string) (domain.Delivery, error) {
+	args := []any{at, at + 60000, at}
+	exclude := ""
+	if len(inFlight) > 0 {
+		// Even an expired lease still belongs to its sender while that attempt is running.
+		exclude = " AND id NOT IN (?" + strings.Repeat(",?", len(inFlight)-1) + ")"
+		for _, id := range inFlight {
+			args = append(args, id)
+		}
+	}
+	query := `UPDATE deliveries SET status='sending',attempts=attempts+1,updated_at=?,next_attempt=?
+		WHERE id=(SELECT id FROM deliveries WHERE status IN ('pending','sending') AND next_attempt<=?` +
+		exclude + " ORDER BY next_attempt LIMIT 1) RETURNING " + deliveryColumns
+	return scanDelivery(s.DB.QueryRowContext(ctx, query, args...))
 }
 func (s *Store) FinishDelivery(ctx context.Context, d domain.Delivery, err error) error {
 	status := "success"

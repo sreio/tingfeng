@@ -96,6 +96,11 @@ func TestAuthenticatedWorkflowAndRestore(t *testing.T) {
 	if n.AllowsPrivate() {
 		t.Fatal("unauthorized request changed network access")
 	}
+	for _, invalid := range []int{0, domain.MaxDeliveryConcurrency + 1} {
+		c.Settings.DeliveryConcurrency = invalid
+		request("PUT", "/api/config", c, 400, srv.URL, true)
+	}
+	c.Settings.DeliveryConcurrency = 3
 	out := request("PUT", "/api/config", c, 200, srv.URL, true)
 	var system struct {
 		AllowPrivate bool `json:"allowPrivate"`
@@ -112,7 +117,19 @@ func TestAuthenticatedWorkflowAndRestore(t *testing.T) {
 	json.Unmarshal(out, &got)
 	disabled := false
 	got.Settings.AllowPrivate = &disabled
-	json.Unmarshal(request("PUT", "/api/config", got, 200, srv.URL, true), &got)
+	oldConfig := func(cfg domain.Config) map[string]any {
+		raw, _ := json.Marshal(cfg)
+		var old map[string]any
+		if err := json.Unmarshal(raw, &old); err != nil {
+			t.Fatal(err)
+		}
+		delete(old["settings"].(map[string]any), "deliveryConcurrency")
+		return old
+	}
+	json.Unmarshal(request("PUT", "/api/config", oldConfig(got), 200, srv.URL, true), &got)
+	if got.Settings.DeliveryConcurrency != 3 {
+		t.Fatal("old client reset the saved delivery limit")
+	}
 	backup := request("GET", "/api/backup", nil, 200, "", false)
 	if strings.Contains(string(backup), "fixture-request-secret") {
 		t.Fatal("backup exported request secret")
@@ -122,7 +139,8 @@ func TestAuthenticatedWorkflowAndRestore(t *testing.T) {
 		t.Fatal(e)
 	}
 	archive.Config.Settings.AllowPrivate = &enabled
-	restore := map[string]any{"backup": archive, "preview": true, "revision": got.Revision}
+	legacyBackup := map[string]any{"format": archive.Format, "version": archive.Version, "config": oldConfig(archive.Config)}
+	restore := map[string]any{"backup": legacyBackup, "preview": true, "revision": got.Revision}
 	request("POST", "/api/restore", restore, 200, srv.URL, true)
 	if !eng.Config().Monitors[0].Enabled {
 		t.Fatal("preview mutated config")
@@ -130,6 +148,9 @@ func TestAuthenticatedWorkflowAndRestore(t *testing.T) {
 	restore["preview"] = false
 	request("POST", "/api/restore", restore, 200, srv.URL, true)
 	imported := eng.Config()
+	if imported.Settings.DeliveryConcurrency != 3 {
+		t.Fatal("old backup reset the saved delivery limit")
+	}
 	if n.AllowsPrivate() {
 		t.Fatal("restoring a backup widened internal network access")
 	}

@@ -19,8 +19,8 @@ const defaults = ref(clone(props.config.settings)),
   passwordError = ref(''),
   changing = ref(false),
   showPassword = ref(false);
-const networkSaving = ref(false),
-  networkError = ref('');
+const runtimeSaving = ref(''),
+  runtimeErrors = ref({});
 const privateEnabled = computed(
   () => props.config.settings.allowPrivate ?? props.system?.allowPrivate ?? false
 );
@@ -48,25 +48,28 @@ async function saveDefaults() {
     busy.value = false;
   }
 }
-async function togglePrivate() {
-  if (networkSaving.value || busy.value) return;
-  networkSaving.value = true;
-  networkError.value = '';
+async function saveRuntimeSetting(key, value) {
+  if (runtimeSaving.value || busy.value) return;
+  runtimeSaving.value = key;
+  runtimeErrors.value[key] = '';
   const draftDefaults = clone(defaults.value);
   try {
     const next = clone(props.config);
-    next.settings.allowPrivate = !privateEnabled.value;
+    next.settings[key] = value;
     await saveConfig(next);
-    defaults.value = { ...draftDefaults, allowPrivate: next.settings.allowPrivate };
-    notice(
-      next.settings.allowPrivate
-        ? '内部网络访问已开启，立即生效。'
-        : '内部网络访问已关闭，新请求仅允许公网地址。'
-    );
+    defaults.value = { ...draftDefaults, [key]: value };
+    if (key === 'deliveryConcurrency') {
+      notice('通知发送并发数已调整为 ' + value + '。');
+    } else {
+      notice(
+        value ? '内部网络访问已开启，立即生效。' : '内部网络访问已关闭，新请求仅允许公网地址。'
+      );
+    }
   } catch (e) {
-    networkError.value = e.message;
+    defaults.value[key] = props.config.settings[key];
+    runtimeErrors.value[key] = e.message;
   } finally {
-    networkSaving.value = false;
+    runtimeSaving.value = '';
   }
 }
 async function changePassword() {
@@ -309,7 +312,7 @@ async function restore() {
           >
         </div>
         <p v-if="error" class="error" role="alert">{{ error }}</p>
-        <button class="btn primary" :disabled="busy || networkSaving">
+        <button class="btn primary" :disabled="busy || !!runtimeSaving">
           {{ busy ? '保存中…' : '保存默认设置' }}
         </button>
       </form>
@@ -333,6 +336,29 @@ async function restore() {
       </p>
       <div class="setting-row">
         <div>
+          <label for="delivery-concurrency"><strong>通知发送并发数</strong></label>
+          <p id="delivery-concurrency-help">
+            所有监控最多同时发送多少条通知。选择后立即生效，调低时正在发送的通知会继续完成。
+          </p>
+          <p v-if="runtimeErrors.deliveryConcurrency" class="error" role="alert">
+            {{ runtimeErrors.deliveryConcurrency }}
+          </p>
+        </div>
+        <select
+          id="delivery-concurrency"
+          v-model.number="defaults.deliveryConcurrency"
+          aria-describedby="delivery-concurrency-help"
+          :disabled="busy || !!runtimeSaving"
+          :aria-busy="runtimeSaving === 'deliveryConcurrency'"
+          @change="saveRuntimeSetting('deliveryConcurrency', defaults.deliveryConcurrency)"
+        >
+          <option v-for="n in 20" :key="n" :value="n">
+            {{ n }}{{ n === 5 ? '（默认）' : '' }}
+          </option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <div>
           <strong>自动清理</strong>
           <p>每小时运行；每次采集也会执行该监控的记录上限。</p>
           <p>最近清理：{{ fmt(system?.lastCleanup, config.settings.timeZone) }}</p>
@@ -352,7 +378,9 @@ async function restore() {
           <p>
             点击开关自动保存，无需改配置文件或重启。关闭后新请求立即恢复限制，已发出的请求不会中断。
           </p>
-          <p v-if="networkError" class="error" role="alert">{{ networkError }}</p>
+          <p v-if="runtimeErrors.allowPrivate" class="error" role="alert">
+            {{ runtimeErrors.allowPrivate }}
+          </p>
         </div>
         <div class="network-control">
           <button
@@ -361,15 +389,15 @@ async function restore() {
             class="switch"
             :class="{ on: privateEnabled }"
             :aria-checked="privateEnabled"
-            :aria-busy="networkSaving"
+            :aria-busy="runtimeSaving === 'allowPrivate'"
             aria-label="允许访问内部网络"
-            :disabled="busy || networkSaving || !system"
-            @click="togglePrivate"
+            :disabled="busy || !!runtimeSaving || !system"
+            @click="saveRuntimeSetting('allowPrivate', !privateEnabled)"
           >
             <span />
           </button>
           <small role="status">{{
-            networkSaving ? '保存中…' : privateEnabled ? '已开启' : '已关闭'
+            runtimeSaving === 'allowPrivate' ? '保存中…' : privateEnabled ? '已开启' : '已关闭'
           }}</small>
         </div>
       </div>
